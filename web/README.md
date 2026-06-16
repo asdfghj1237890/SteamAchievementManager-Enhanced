@@ -108,8 +108,9 @@ web/
 |---|---|
 | `steam-core` FFI (client init, owned-games list) | **Windows + macOS (arm64)**: live-validated. macOS via `dlopen` (`imp_macos`); owned-games + per-game achievement read confirmed against running Steam (`cargo run --bin probe <appid>`, `cargo run --bin read-game <appid>`) on an Apple Silicon machine |
 | Tauri app (`list_games` command + `TauriSource`) | wired; `cargo check`/`cargo build` verified on Windows + macOS |
-| `loadGame` (achievement read) | **live on Windows + macOS** (ISteamUserStats013: RequestUserStats / GetAchievement* / stats) |
+| `loadGame` (achievement read) | **live on Windows + macOS** (ISteamUserStats013: RequestUserStats / GetAchievement* / stats). For a game whose schema isn't cached on disk yet, the schema downloads asynchronously — `prepare_stats` waits for that app's `UserStatsReceived` with `k_EResultOK` (not the first callback), so achievements load correctly on the **first** open |
 | `saveChanges` (achievement write) | **live on Windows + macOS** (ISteamUserStats013: SetAchievement/ClearAchievement/SetStat/StoreStats). macOS validated via an idempotent re-set; clears are user-verified |
+| Library progress bars | `completion_local` reads Steam's on-disk stats cache (`appcache/stats/*.bin`), so bars fill only for games Steam has cached locally — same on both platforms (no game is launched, no cloud sync). Full-library progress *without* a local cache would need the internal `IClientUserStats` path, which is **blocked for an external process on macOS** (`CreateSteamPipe` via the client engine returns 0); see [docs/superpowers/specs/2026-06-16-clientuserstats-spike-results.md](docs/superpowers/specs/2026-06-16-clientuserstats-spike-results.md). The pragmatic alternative is the Steam Web API |
 
 **Important:** unlocking achievements / editing stats writes irreversibly to your
 real Steam account. Those paths are the user's to run and verify; this repo does

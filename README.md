@@ -2,6 +2,7 @@
 
 [![License: zlib](https://img.shields.io/badge/License-zlib-blue.svg)](LICENSE.txt)
 ![Desktop: Windows](https://img.shields.io/badge/desktop-Windows-0078D6?logo=windows&logoColor=white)
+![Desktop: macOS](https://img.shields.io/badge/desktop-macOS_Apple_Silicon-000000?logo=apple&logoColor=white)
 ![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
 ![Vite 5](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
 ![TypeScript 5](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
@@ -13,7 +14,7 @@ An enhanced fork of [gibbed's **Steam Achievement Manager (SAM)**](https://githu
 
 Like the original, it reads and writes Steam achievements and statistics through the **internal `steamclient.dll` interfaces** (not the public Web API / Steamworks SDK), so it operates against your local, logged-in Steam client.
 
-> **Requirements:** the [Steam client](https://store.steampowered.com/about/) installed, a Steam account, and Steam running + logged in. The desktop (real-Steam) build is **Windows-only**.
+> **Requirements:** the [Steam client](https://store.steampowered.com/about/) installed, a Steam account, and Steam running + logged in. The desktop (real-Steam) build runs on **Windows** and **macOS (Apple Silicon)** — on macOS it loads `steamclient.dylib` via `dlopen` (see [`web/steam-core/src/imp_macos.rs`](web/steam-core/src/imp_macos.rs)); the Windows path is unchanged.
 
 > **⚠️ This tool writes to your real Steam account.** Unlocking achievements and editing stats is irreversible from the tool's side. Protected and increment-only entries are surfaced and blocked accordingly — but use it on your own account and understand what you change.
 
@@ -24,7 +25,7 @@ Like the original, it reads and writes Steam achievements and statistics through
 The new desktop app (in [`web/`](web/)) is a ground-up modern rewrite of the SAM interface:
 
 - **Single-window experience** — Library, Achievements, Statistics, and Settings in one cohesive window with a custom titlebar.
-- **Real local Steam read/write** — your owned-games library, achievements (unlock / lock), and stats (edit), written back through the same internal interfaces the original uses, isolated in per-game worker processes.
+- **Real local Steam read/write** — your owned-games library, achievements (unlock / lock), and stats (edit), written back through the same internal interfaces the original uses, isolated in per-game worker processes. Works on **Windows and macOS (Apple Silicon)** — the macOS port (`steamclient.dylib` via `dlopen`) is read/write; opening a game whose stats aren't cached yet downloads its schema on the first open, so achievements load on the first click.
 - **Completion without launching games** — library progress is read straight from Steam's local stats cache (`appcache/stats/*.bin`), so opening the library never launches a game or triggers a cloud-save conflict. This is SAM's approach: no game is ever started just to read its progress.
 - **Real Steam art** — game header covers and per-achievement icons pulled from Steam's CDN; greyed icons for locked achievements.
 - **Real unlock dates & global rarity %** — shown per achievement.
@@ -57,12 +58,18 @@ npm install
 # Web demo — mock data, no Steam, runs in a browser
 npm run dev
 
-# Desktop app — real local Steam (Windows; needs the Rust toolchain + Tauri prerequisites)
-npm run tauri dev        # or: cargo tauri dev
+# Desktop app — real local Steam (Windows or macOS/Apple Silicon;
+# needs the Rust toolchain + the Tauri CLI). Steam must be running + logged in.
+npx @tauri-apps/cli@^2 dev    # or: cargo tauri dev (after `cargo install tauri-cli`)
 
-# Production desktop build (installer)
-npm run tauri build
+# Production desktop build (installer / .app)
+npx @tauri-apps/cli@^2 build
 ```
+
+> Read-only Steam smoke tests (safe, never write): from [`web/steam-core`](web/steam-core),
+> `cargo run --bin probe <appId>…` checks ownership and `cargo run --bin read-game <appId>`
+> dumps a game's achievements/stats. See [`web/README.md`](web/README.md#phase-2-status--verification-boundary)
+> for the per-platform verification boundary.
 
 See [`web/README.md`](web/README.md) for a deeper dive into the data layer and the Rust Steam core.
 
