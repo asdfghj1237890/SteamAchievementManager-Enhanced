@@ -30,19 +30,39 @@ function WinCtrl({
   )
 }
 
-function MacDot({ bg, onClick }: { bg: string; onClick: () => void }) {
+function MacDot({
+  bg, glyph, show, onClick,
+}: {
+  bg: string
+  glyph: string
+  show: boolean
+  onClick: () => void
+}) {
   return (
     <span
       onMouseDown={noDrag}
       onClick={onClick}
-      style={{ width: '12px', height: '12px', borderRadius: '50%', background: bg, cursor: 'pointer' }}
-    />
+      style={{
+        width: '12px', height: '12px', borderRadius: '50%', background: bg, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <span
+        style={{
+          fontSize: '10px', fontWeight: 900, lineHeight: 1, color: 'rgba(0,0,0,.72)',
+          opacity: show ? 1 : 0, transition: 'opacity .12s', pointerEvents: 'none',
+        }}
+      >
+        {glyph}
+      </span>
+    </span>
   )
 }
 
 export default function TitleBar() {
   const { state, t, activeGame } = useApp()
   const loc = useLocation()
+  const { hover: dotsHover, hoverProps: dotsHoverProps } = useHover()
   const isMac = state.platform !== 'windows'
 
   const app = t('app.name')
@@ -61,10 +81,10 @@ export default function TitleBar() {
           background: 'var(--win)', borderBottom: '1px solid var(--bd)', position: 'relative',
         }}
       >
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <MacDot bg="#ff5f57" onClick={winClose} />
-          <MacDot bg="#febc2e" onClick={winMinimize} />
-          <MacDot bg="#28c840" onClick={winToggleMaximize} />
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }} {...dotsHoverProps}>
+          <MacDot bg="#ff5f57" glyph="✕" show={dotsHover} onClick={winClose} />
+          <MacDot bg="#febc2e" glyph="−" show={dotsHover} onClick={winMinimize} />
+          <MacDot bg="#28c840" glyph="+" show={dotsHover} onClick={winToggleMaximize} />
         </div>
         <div
           style={{
