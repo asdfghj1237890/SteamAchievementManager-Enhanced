@@ -289,6 +289,273 @@ impl SteamClient {
             })
             .collect()
     }
+
+    unsafe fn get_interface(&self, slot: usize, version: &str) -> Result<*mut c_void, String> {
+        let f: extern "C" fn(*mut c_void, i32, i32, *const c_char) -> *mut c_void =
+            vfn(self.client, slot);
+        let v = CString::new(version).unwrap();
+        let p = f(self.client, self.user, self.pipe, v.as_ptr());
+        if p.is_null() {
+            Err(format!("取得介面 {version} 失敗"))
+        } else {
+            Ok(p)
+        }
+    }
+
+    unsafe fn steam_id(&self, user_iface: *mut c_void) -> u64 {
+        // ISteamUser012.GetSteamID (vtable 2) returns via out-param.
+        let f: extern "C" fn(*mut c_void, *mut u64) = vfn(user_iface, 2);
+        let mut id: u64 = 0;
+        f(user_iface, &mut id);
+        id
+    }
+
+    /// Pump callbacks until `callback_id` arrives (or timeout). Frees each dequeued.
+    unsafe fn wait_for_callback(&self, callback_id: i32, timeout_secs: u64) -> bool {
+        let get_cb: extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8 =
+            match self.export("Steam_BGetCallback") {
+                Ok(f) => f,
+                Err(_) => return false,
+            };
+        let free_cb: extern "C" fn(i32) -> u8 = match self.export("Steam_FreeLastCallback") {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+        let start = Instant::now();
+        loop {
+            let mut msg = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+            let mut call: i32 = 0;
+            if get_cb(self.pipe, &mut msg, &mut call) != 0 {
+                let hit = msg.id == callback_id;
+                free_cb(self.pipe);
+                if hit {
+                    return true;
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if start.elapsed() > Duration::from_secs(timeout_secs) {
+                return false;
+            }
+        }
+    }
+
+    unsafe fn prepare_stats(&self) -> Result<*mut c_void, String> {
+        let user_iface = self.get_interface(5, "SteamUser012")?; // GetISteamUser
+        let steam_id = self.steam_id(user_iface);
+        let stats = self.get_interface(13, "STEAMUSERSTATS_INTERFACE_VERSION013")?; // GetISteamUserStats
+
+        // RequestUserStats (vtable 15) → triggers UserStatsReceived.
+        let request: extern "C" fn(*mut c_void, u64) -> u64 = vfn(stats, 15);
+        request(stats, steam_id);
+
+        if !self.wait_for_callback(USER_STATS_RECEIVED, 8) {
+            return Err("等待 Steam 統計逾時（請確認該遊戲在 Steam 已安裝/有成就）".into());
+        }
+        Ok(stats)
+    }
+
+    /// ISteamApps008.GetCurrentGameLanguage (vtable 4).
+    fn game_language(&self) -> String {
+        unsafe {
+            let f: extern "C" fn(*mut c_void) -> *const c_char = vfn(self.apps008, 4);
+            cstr(f(self.apps008))
+        }
+    }
+
+    fn read_stat_defs(&self, app_id: u32) -> Vec<StatDef> {
+        let Ok(data) = std::fs::read(schema_path(&self.root, app_id)) else {
+            return Vec::new();
+        };
+        let Some(root) = super::parse_kv(&data) else {
+            return Vec::new();
+        };
+        let Some(app_node) = root.child(&app_id.to_string()) else {
+            return Vec::new();
+        };
+        let Some(stats) = app_node.child("stats") else {
+            return Vec::new();
+        };
+        let lang = self.game_language();
+        let mut defs = Vec::new();
+        for stat in &stats.children {
+            let kind = resolve_stat_type(stat);
+            if kind == 0 {
+                continue;
+            }
+            let id = stat.child("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            if id.is_empty() {
+                continue;
+            }
+            defs.push(StatDef {
+                name: resolve_display_name(stat, &lang, &id),
+                is_float: kind == 2,
+                permission: stat.child("permission").map(|p| p.as_int()).unwrap_or(0),
+                increment_only: stat.child("incrementonly").map(|p| p.as_bool()).unwrap_or(false),
+                id,
+            });
+        }
+        defs
+    }
+
+    pub fn read_stats(&self, app_id: u32) -> Result<GameStats, String> {
+        unsafe {
+            let stats = self.prepare_stats()?;
+
+            let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
+            let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
+            let get_disp: extern "C" fn(*mut c_void, *const c_char, *const c_char) -> *const c_char =
+                vfn(stats, 11);
+            let get_aut: extern "C" fn(*mut c_void, *const c_char, *mut u8, *mut u32) -> u8 =
+                vfn(stats, 8);
+
+            // Best-effort global achievement rarity (vtable 33 request, vtable 36 poll).
+            let req_global: extern "C" fn(*mut c_void) -> u64 = vfn(stats, 33);
+            let get_pct: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 36);
+            req_global(stats);
+            let mut have_global = false;
+            let probe_ptr = if num(stats) > 0 { get_name(stats, 0) } else { std::ptr::null() };
+            if !probe_ptr.is_null() {
+                if let Ok(probe) = CString::new(cstr(probe_ptr)) {
+                    if let (Ok(get_cb), Ok(free_cb)) = (
+                        self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>("Steam_BGetCallback"),
+                        self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
+                    ) {
+                        let start = Instant::now();
+                        while start.elapsed() < Duration::from_secs(8) {
+                            let mut m = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+                            let mut c: i32 = 0;
+                            while get_cb(self.pipe, &mut m, &mut c) != 0 {
+                                free_cb(self.pipe);
+                            }
+                            let mut p: f32 = 0.0;
+                            if get_pct(stats, probe.as_ptr(), &mut p) != 0 {
+                                have_global = true;
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                }
+            }
+
+            let key_name = CString::new("name").unwrap();
+            let key_desc = CString::new("desc").unwrap();
+            let key_hidden = CString::new("hidden").unwrap();
+            let key_icon = CString::new("icon").unwrap();
+            let key_icon_gray = CString::new("icon_gray").unwrap();
+
+            let count = num(stats);
+            let mut achievements = Vec::with_capacity(count as usize);
+            for i in 0..count {
+                let id_ptr = get_name(stats, i);
+                if id_ptr.is_null() {
+                    continue;
+                }
+                let id = cstr(id_ptr);
+                if id.is_empty() {
+                    continue;
+                }
+                let idc = CString::new(id.clone()).unwrap();
+
+                let name = cstr(get_disp(stats, idc.as_ptr(), key_name.as_ptr()));
+                let desc = cstr(get_disp(stats, idc.as_ptr(), key_desc.as_ptr()));
+                let hidden = cstr(get_disp(stats, idc.as_ptr(), key_hidden.as_ptr())) == "1";
+                let icon = cstr(get_disp(stats, idc.as_ptr(), key_icon.as_ptr()));
+                let icon_gray = cstr(get_disp(stats, idc.as_ptr(), key_icon_gray.as_ptr()));
+
+                let mut achieved: u8 = 0;
+                let mut unlock_time: u32 = 0;
+                get_aut(stats, idc.as_ptr(), &mut achieved, &mut unlock_time);
+
+                let mut rarity: f32 = 0.0;
+                if have_global {
+                    get_pct(stats, idc.as_ptr(), &mut rarity);
+                }
+
+                achievements.push(AchievementInfo {
+                    name: if name.is_empty() { id.clone() } else { name },
+                    id,
+                    desc,
+                    hidden,
+                    unlocked: achieved != 0,
+                    unlock_time,
+                    rarity: rarity as f64,
+                    icon,
+                    icon_gray,
+                });
+            }
+
+            // ---- statistics ----
+            let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 = vfn(stats, 1);
+            let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 0);
+            let mut stat_infos = Vec::new();
+            for d in self.read_stat_defs(app_id) {
+                let idc = match CString::new(d.id.clone()) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let value = if d.is_float {
+                    let mut v: f32 = 0.0;
+                    if get_float(stats, idc.as_ptr(), &mut v) == 0 {
+                        continue;
+                    }
+                    v as f64
+                } else {
+                    let mut v: i32 = 0;
+                    if get_int(stats, idc.as_ptr(), &mut v) == 0 {
+                        continue;
+                    }
+                    v as f64
+                };
+                stat_infos.push(StatInfo {
+                    id: d.id,
+                    name: d.name,
+                    value,
+                    is_float: d.is_float,
+                    protected: (d.permission & 2) != 0,
+                    increment_only: d.increment_only,
+                });
+            }
+
+            Ok(GameStats {
+                app_id,
+                name: self.app_data(app_id, "name").unwrap_or_else(|| app_id.to_string()),
+                achievements,
+                stats: stat_infos,
+            })
+        }
+    }
+
+    pub fn count_achievements(&self) -> Result<(u32, u32), String> {
+        unsafe {
+            let stats = self.prepare_stats()?;
+            let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
+            let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
+            let get_ach: extern "C" fn(*mut c_void, *const c_char, *mut u8) -> u8 = vfn(stats, 5);
+            let total = num(stats);
+            let mut earned = 0u32;
+            for i in 0..total {
+                let id_ptr = get_name(stats, i);
+                if id_ptr.is_null() {
+                    continue;
+                }
+                let id = cstr(id_ptr);
+                if id.is_empty() {
+                    continue;
+                }
+                let idc = match CString::new(id) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let mut achieved: u8 = 0;
+                if get_ach(stats, idc.as_ptr(), &mut achieved) != 0 && achieved != 0 {
+                    earned += 1;
+                }
+            }
+            Ok((earned, total))
+        }
+    }
 }
 
 impl Drop for SteamClient {
