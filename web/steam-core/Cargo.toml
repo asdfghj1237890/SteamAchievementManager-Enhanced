@@ -18,6 +18,17 @@ path = "src/bin/probe.rs"
 name = "read-game"
 path = "src/bin/read-game.rs"
 
+# Read-only full-library scan timing: `cargo run --release --bin list-owned`. Never writes.
+[[bin]]
+name = "list-owned"
+path = "src/bin/list-owned.rs"
+
+# File-only completion from the local stats cache (no Steam connection, never
+# launches the game): `cargo run --bin completion <appid>`. Never writes.
+[[bin]]
+name = "completion"
+path = "src/bin/completion.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
