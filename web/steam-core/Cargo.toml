@@ -8,26 +8,15 @@ description = "Local Steam client (internal steamclient.dll interfaces) read/wri
 name = "steam_core"
 path = "src/lib.rs"
 
-# Standalone read-only probe: `cargo run --bin probe` lists which of the sample
-# app IDs the logged-in Steam user owns. Safe — it never writes to Steam.
+# Read-only ownership probe: `cargo run --bin probe <appid>...`. Never writes.
 [[bin]]
 name = "probe"
 path = "src/bin/probe.rs"
 
-# Read-only per-game achievement read: `cargo run --bin read-game <appid>`.
+# Read-only per-game achievement read: `cargo run --bin read-game <appid>`. Never writes.
 [[bin]]
 name = "read-game"
 path = "src/bin/read-game.rs"
-
-# Read-only full-library scan timing: `cargo run --release --bin list-owned`.
-[[bin]]
-name = "list-owned"
-path = "src/bin/list-owned.rs"
-
-# File-only completion (no Steam connection, no launch): `cargo run --bin completion <appid>`.
-[[bin]]
-name = "completion"
-path = "src/bin/completion.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

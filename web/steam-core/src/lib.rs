@@ -915,11 +915,40 @@ pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
 #[cfg(windows)]
 pub use imp::completion_local;
 
+#[cfg(target_os = "macos")]
+mod imp_macos;
+
+#[cfg(target_os = "macos")]
+pub use imp_macos::{completion_local, SteamClient};
+
+#[cfg(target_os = "macos")]
+pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
+    let entries = fetch_app_list()?;
+    Ok(imp_macos::SteamClient::connect()?.owned_games_typed(&entries))
+}
+
+#[cfg(target_os = "macos")]
+pub fn read_game(app_id: u32) -> Result<GameStats, String> {
+    std::env::set_var("SteamAppId", app_id.to_string());
+    imp_macos::SteamClient::connect()?.read_stats(app_id)
+}
+
+#[cfg(target_os = "macos")]
+pub fn progress_game(app_id: u32) -> Result<(u32, u32), String> {
+    std::env::set_var("SteamAppId", app_id.to_string());
+    imp_macos::SteamClient::connect()?.count_achievements()
+}
+
+#[cfg(target_os = "macos")]
+pub fn write_game(_app_id: u32, _ach: &[AchChange], _stats: &[StatChange]) -> Result<u32, String> {
+    Err("macOS 寫入支援尚在開發（本階段僅讀取）".into())
+}
+
 // ---- Non-Windows fallbacks so the crate still type-checks off-platform. ----
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub struct SteamClient;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl SteamClient {
     pub fn connect() -> Result<Self, String> {
         Err("Steam 整合僅支援 Windows".into())
@@ -935,27 +964,27 @@ impl SteamClient {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn read_game(_app_id: u32) -> Result<GameStats, String> {
     Err("Steam 整合僅支援 Windows".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn write_game(_app_id: u32, _ach: &[AchChange], _stats: &[StatChange]) -> Result<u32, String> {
     Err("Steam 整合僅支援 Windows".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn progress_game(_app_id: u32) -> Result<(u32, u32), String> {
     Err("Steam 整合僅支援 Windows".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
     Err("Steam 整合僅支援 Windows".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn completion_local(_app_id: u32) -> Option<(u32, u32)> {
     None
 }

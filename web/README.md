@@ -59,14 +59,24 @@ cd web
 cargo tauri dev   # builds src-tauri + loads the Vite UI in a desktop window
 ```
 
+Supported live today: **Windows** (read + write) and **macOS / Apple Silicon**
+(read only — list games, read achievements/stats). Writing achievements/stats is
+not yet implemented on macOS and returns a clear error
+(`macOS 寫入支援尚在開發（本階段僅讀取）`). On macOS, `steamclient.dylib` is
+loaded via `dlopen` (see `steam-core/src/imp_macos.rs`); the Windows path is
+unchanged.
+
 ### Read-only Steam smoke test (safe)
-Before the desktop app, you can verify the Steam FFI in isolation. This connects
-to your running Steam and prints which of a sample of App IDs you own — it
-**never writes** to Steam:
+Before the desktop app, you can verify the Steam FFI in isolation. These connect
+to your running Steam and **never write** to it:
 ```bash
 cd web/steam-core
-cargo run --bin probe
+cargo run --bin probe 3350200 3478050   # check specific app ids (fast)
+cargo run --bin probe                     # full library scan via the SAM list
+cargo run --bin read-game <appId>         # dump one game's achievements/stats
 ```
+On macOS these exercise the `dlopen`-based `imp_macos` layer; on Windows, the
+`steamclient.dll` layer.
 
 ## Layout
 
@@ -84,7 +94,8 @@ web/
     state/              store (async) + AppContext (route-aware actions)
     components/         AppLayout, TitleBar, Sidebar, Library, GameScreen,
                         GameHeader, Achievements, Statistics, Settings, Toast, Panes, ui/Seg
-  steam-core/          Rust: internal steamclient.dll FFI (lib) + `probe` bin
+  steam-core/          Rust: internal Steam FFI — imp (steamclient.dll, Windows)
+                        + imp_macos (steamclient.dylib via dlopen) + probe/read-game bins
   src-tauri/           Tauri v2 app: list_games / load_game / save_changes commands
 ```
 
@@ -92,9 +103,10 @@ web/
 
 | Piece | State |
 |---|---|
-| `steam-core` FFI (client init, owned-games list) | **compiles + links** here; live read tested via `cargo run --bin probe` on a machine with Steam |
-| Tauri app (`list_games` command + `TauriSource`) | wired; `cargo check` verified |
-| `loadGame` / `saveChanges` (achievement read/write) | **stubbed** — next slice (ISteamUserStats013: GetAchievement/SetAchievement/StoreStats) |
+| `steam-core` FFI (client init, owned-games list) | **Windows + macOS (arm64)**: live-validated. macOS via `dlopen` (`imp_macos`); owned-games + per-game achievement read confirmed against running Steam (`cargo run --bin probe <appid>`, `cargo run --bin read-game <appid>`) on an Apple Silicon machine |
+| Tauri app (`list_games` command + `TauriSource`) | wired; `cargo check`/`cargo build` verified on Windows + macOS |
+| `loadGame` (achievement read) | **live on Windows + macOS** (ISteamUserStats013: RequestUserStats / GetAchievement* / stats) |
+| `saveChanges` (achievement write) | **Windows only**. macOS write path deferred — returns a clear "not yet" error this milestone (next slice: SetAchievement/StoreStats on macOS, user-verified) |
 
 **Important:** unlocking achievements / editing stats writes irreversibly to your
 real Steam account. Those paths are the user's to run and verify; this repo does
