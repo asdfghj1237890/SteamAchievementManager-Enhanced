@@ -1,0 +1,78 @@
+name: Release Windows portable
+
+# Build the standalone Windows portable .exe (no installer) and attach it to a
+# GitHub Release. Triggers on pushing a version tag like `v1.0.0`, or manually
+# via the Actions tab.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0). Created on the current commit if it does not exist.'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write # required to create the GitHub Release
+
+jobs:
+  windows-portable:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      # Compiles the frontend (beforeBuildCommand) and the Rust shell in release
+      # mode, embedding the UI into the binary. --no-bundle skips NSIS/MSI
+      # installers, leaving just the portable target/release/app.exe.
+      - name: Build portable executable (release, no installer)
+        working-directory: web
+        shell: bash
+        run: npx --yes '@tauri-apps/cli@^2' build --no-bundle
+
+      - name: Stage release asset
+        id: stage
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          asset="SteamAchievementManager-Enhanced-${tag}-windows-x64.exe"
+          cp web/src-tauri/target/release/app.exe "$asset"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ steps.stage.outputs.tag }}"
+          asset="${{ steps.stage.outputs.asset }}"
+          notes=$'Windows portable build — a single self-contained `.exe`, no installation.\n\n**How to run:** download the `.exe` below and double-click it. Requires:\n- Windows 10/11 with the WebView2 runtime (preinstalled on current Windows)\n- Steam installed, running, and logged in\n\n⚠️ This writes to your real Steam account when you unlock achievements or edit stats.'
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag exists — uploading asset."
+            gh release upload "$tag" "$asset" --clobber
+          else
+            echo "Creating release $tag."
+            gh release create "$tag" "$asset" --title "$tag" --notes "$notes"
+          fi
