@@ -401,3 +401,7 @@ _design_src/
 
 # Superpowers planning/spec scratch — local design notes, not shipped project code.
 docs/superpowers/
+
+# Local release artifacts — portable build output (e.g. dist/*.exe). Built by
+# `cargo tauri build --no-bundle`; releases are published by CI, not committed.
+/dist/
