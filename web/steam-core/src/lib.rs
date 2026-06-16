@@ -587,10 +587,50 @@ mod imp {
             let request: extern "C" fn(*mut c_void, u64) -> u64 = vfn(stats, 15);
             request(stats, steam_id);
 
-            if !self.wait_for_callback(USER_STATS_RECEIVED, 8) {
-                return Err("等待 Steam 統計逾時（請確認該遊戲在 Steam 已安裝/有成就）".into());
+            // For a game whose schema isn't cached on disk, the schema downloads
+            // asynchronously: the FIRST UserStatsReceived arrives with a non-OK result
+            // (still downloading) and GetNumAchievements is still 0. A SECOND callback
+            // then arrives with k_EResultOK once the schema is loaded. So we must wait
+            // for THIS app's UserStatsReceived with result OK — not just any callback.
+            let want_app: u32 = std::env::var("SteamAppId").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
+
+            let (Ok(get_cb), Ok(free_cb)) = (
+                self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>("Steam_BGetCallback"),
+                self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
+            ) else {
+                // exports missing → fall back to the old single-callback wait
+                return if self.wait_for_callback(USER_STATS_RECEIVED, 8) {
+                    Ok(stats)
+                } else {
+                    Err("等待 Steam 統計逾時（請確認該遊戲在 Steam 已安裝/有成就）".into())
+                };
+            };
+
+            let start = Instant::now();
+            loop {
+                let mut got_ok = false;
+                let mut msg = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+                let mut call: i32 = 0;
+                while get_cb(self.pipe, &mut msg, &mut call) != 0 {
+                    if msg.id == USER_STATS_RECEIVED && !msg.param.is_null() && msg.param_size >= 12 {
+                        let game_id = *(msg.param as *const u64) as u32; // m_nGameID (low 32 = appId)
+                        let result = *(msg.param.add(8) as *const i32); // m_eResult (k_EResultOK == 1)
+                        if (want_app == 0 || game_id == want_app) && result == 1 {
+                            got_ok = true;
+                        }
+                    }
+                    free_cb(self.pipe);
+                }
+                // OK callback for our app, or the schema is already loaded (count > 0).
+                if got_ok || num(stats) > 0 {
+                    return Ok(stats);
+                }
+                if start.elapsed() > Duration::from_secs(20) {
+                    return Err("等待 Steam 統計逾時（請確認該遊戲在 Steam 已安裝/有成就）".into());
+                }
+                std::thread::sleep(Duration::from_millis(80));
             }
-            Ok(stats)
         }
 
         pub fn read_stats(&self, app_id: u32) -> Result<GameStats, String> {
