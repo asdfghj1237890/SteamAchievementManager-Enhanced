@@ -20,6 +20,18 @@ Like the original, it reads and writes Steam achievements and statistics through
 
 ---
 
+## 📸 Screenshots
+
+Shown with the bundled **demo data** (fictional games) — the same interface runs against your real Steam library.
+
+| Library | Achievements |
+|:---:|:---:|
+| ![Library](docs/screenshots/library.png) | ![Achievements](docs/screenshots/achievements.png) |
+
+| Statistics | Settings |
+|:---:|:---:|
+| ![Statistics](docs/screenshots/statistics.png) | ![Settings](docs/screenshots/settings.png) |
+
 ## ✨ What's enhanced
 
 The new desktop app (in [`web/`](web/)) is a ground-up modern rewrite of the SAM interface:
