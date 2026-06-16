@@ -940,8 +940,9 @@ pub fn progress_game(app_id: u32) -> Result<(u32, u32), String> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn write_game(_app_id: u32, _ach: &[AchChange], _stats: &[StatChange]) -> Result<u32, String> {
-    Err("macOS 寫入支援尚在開發（本階段僅讀取）".into())
+pub fn write_game(app_id: u32, ach: &[AchChange], stats: &[StatChange]) -> Result<u32, String> {
+    std::env::set_var("SteamAppId", app_id.to_string());
+    imp_macos::SteamClient::connect()?.write_stats(app_id, ach, stats)
 }
 
 // ---- Non-Windows fallbacks so the crate still type-checks off-platform. ----
