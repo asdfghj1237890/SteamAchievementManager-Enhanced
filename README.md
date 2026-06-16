@@ -7,7 +7,7 @@
 ![Vite 5](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
 ![TypeScript 5](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)
-![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-stable-CE422B?logo=rust&logoColor=white)
 ![i18n: 10 languages](https://img.shields.io/badge/i18n-10_languages-success)
 
 An enhanced fork of [gibbed's **Steam Achievement Manager (SAM)**](https://github.com/gibbed/SteamAchievementManager) that adds a **modern desktop app** — a full UI redesign built with React + Vite + TypeScript and a native **Tauri + Rust** shell — while keeping the original C# SAM intact in this repository.
