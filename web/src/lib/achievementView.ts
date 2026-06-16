@@ -14,7 +14,6 @@ export interface AchView {
   /** Real Steam achievement icon URL (real source only); falls back to the tile. */
   iconUrl?: string
   rarityText: string
-  dateText: string
   stateText: string
   showBadge: boolean
   badgeText: string | null
@@ -27,8 +26,10 @@ export interface AchView {
   badgeStyle: CSSProperties
 }
 
-/** Port of the design's enrich(): derive all per-achievement display values + styles. */
-export function enrichAchievement(g: Game, a: Achievement, t: Translate): AchView {
+/** Port of the design's enrich(): derive all per-achievement display values + styles.
+ *  `savedUnlocked` is the committed (last-saved) unlock state, used to tell a genuine
+ *  unlock (real date) apart from a pending toggle (no fabricated date). */
+export function enrichAchievement(g: Game, a: Achievement, t: Translate, savedUnlocked: boolean): AchView {
   const h = (g.hue + a.rarity * 2) % 360
   const iconCommon: CSSProperties = {
     display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700,
@@ -37,15 +38,39 @@ export function enrichAchievement(g: Game, a: Achievement, t: Translate): AchVie
   const iconBg: CSSProperties = a.unlocked
     ? { background: `linear-gradient(145deg, hsl(${h} 60% 56%), hsl(${(h + 26) % 360} 64% 44%))`, color: '#fff' }
     : { background: 'var(--s3)', color: 'var(--t3)' }
-  const dd = ((a.points * 7 + 3) % 26) + 1
-  const demoDate = `${g.y}/${String(g.m).padStart(2, '0')}/${String(dd).padStart(2, '0')}`
   const realDate = a.unlockTime
     ? (() => {
         const d = new Date(a.unlockTime * 1000)
         return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
       })()
     : null
-  const dateText = a.unlocked ? (realDate ?? demoDate) : t('ach.locked')
+
+  // Four honest states from saved (committed) vs working (live) unlock — no
+  // fabricated dates: a real date shows only when Steam actually reported one.
+  const working = a.unlocked
+  let stateText: string
+  let stateColor: string
+  let stateBg: string
+  let dateFont = false
+  if (working && savedUnlocked) {
+    stateText = realDate ? t('ach.unlockedOn', { date: realDate }) : t('ach.unlocked')
+    stateColor = 'var(--good)'
+    stateBg = 'color-mix(in srgb, var(--good) 15%, transparent)'
+    dateFont = !!realDate
+  } else if (working && !savedUnlocked) {
+    stateText = t('ach.pendingUnlock')
+    stateColor = 'var(--accent)'
+    stateBg = 'color-mix(in srgb, var(--accent) 15%, transparent)'
+  } else if (!working && savedUnlocked) {
+    stateText = t('ach.pendingLock')
+    stateColor = 'var(--accent)'
+    stateBg = 'color-mix(in srgb, var(--accent) 15%, transparent)'
+  } else {
+    stateText = a.protected ? t('badge.protected') : t('ach.stateLocked')
+    stateColor = a.protected ? 'var(--danger)' : 'var(--t3)'
+    stateBg = a.protected ? 'color-mix(in srgb, var(--danger) 13%, transparent)' : 'var(--s3)'
+  }
+
   const badge = a.protected ? t('badge.protected') : a.hidden ? t('badge.hidden') : null
 
   const iconFile = a.unlocked ? a.icon : a.iconGray ?? a.icon
@@ -60,7 +85,6 @@ export function enrichAchievement(g: Game, a: Achievement, t: Translate): AchVie
     unlocked: a.unlocked,
     protected: a.protected,
     rarityText: t('ach.rarity', { pct: a.rarity }),
-    dateText,
     check: a.unlocked ? '✓' : a.protected ? '🔒' : '',
     icon: a.name[0],
     iconUrl,
@@ -85,16 +109,12 @@ export function enrichAchievement(g: Game, a: Achievement, t: Translate): AchVie
       : a.protected
         ? { ...ckBase, borderStyle: 'dashed', color: 'var(--t3)', cursor: 'not-allowed', fontSize: '11px' }
         : { ...ckBase },
-    stateText: a.unlocked ? t('ach.unlockedOn', { date: dateText }) : a.protected ? t('badge.protected') : t('ach.stateLocked'),
+    stateText,
     stateStyle: {
       fontSize: '11px', fontWeight: 600, padding: '3px 8px', borderRadius: '999px', whiteSpace: 'nowrap',
-      fontFamily: a.unlocked ? 'var(--meta)' : 'inherit',
-      color: a.unlocked ? 'var(--good)' : a.protected ? 'var(--danger)' : 'var(--t3)',
-      background: a.unlocked
-        ? 'color-mix(in srgb, var(--good) 15%, transparent)'
-        : a.protected
-          ? 'color-mix(in srgb, var(--danger) 13%, transparent)'
-          : 'var(--s3)',
+      fontFamily: dateFont ? 'var(--meta)' : 'inherit',
+      color: stateColor,
+      background: stateBg,
     },
     showBadge: !!badge,
     badgeText: badge,

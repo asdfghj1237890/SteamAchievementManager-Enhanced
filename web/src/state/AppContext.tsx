@@ -249,7 +249,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!appId) return {}
       const game = s.loaded[appId]
       if (!game) return {}
-      const list = filteredAch(game, s.achState, s.filter, s.achSearch).filter((a) => !a.protected)
+      const list = filteredAch(game, s.achState, s.origAch, s.filter, s.achSearch).filter((a) => !a.protected)
       const m = bulkApply(s.achState[appId] ?? {}, list, mode)
       return { achState: { ...s.achState, [appId]: m } }
     })

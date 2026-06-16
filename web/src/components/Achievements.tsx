@@ -18,15 +18,21 @@ export default function Achievements() {
   const { state, t, activeGame: g, set, bulk, store, toggleAch } = useApp()
   if (!g) return null
 
-  const { earned: unlockedCount, total } = completion(g, state.achState)
-  const filtered = filteredAch(g, state.achState, state.filter, state.achSearch, state.sort)
-  const views = filtered.map((a) => enrichAchievement(g, a, t))
+  const { total } = completion(g, state.achState)
+  const filtered = filteredAch(g, state.achState, state.origAch, state.filter, state.achSearch, state.sort)
+  const savedMap = state.origAch[g.id] ?? {}
+  const views = filtered.map((a) => enrichAchievement(g, a, t, !!savedMap[a.id]))
   const pending = pendingCount(g, state.achState, state.origAch, state.statState, state.origStat)
 
+  // Counts reflect the SAVED partition, matching what each filter actually shows.
+  const savedUnlockedCount = g.achievements.reduce(
+    (n, a) => n + ((a.id in savedMap ? savedMap[a.id] : a.unlocked) ? 1 : 0),
+    0,
+  )
   const FILTER_BTNS: [AchFilter, string][] = [
     ['all', t('filter.all', { n: total })],
-    ['unlocked', t('filter.unlocked', { n: unlockedCount })],
-    ['locked', t('filter.locked', { n: total - unlockedCount })],
+    ['unlocked', t('filter.unlocked', { n: savedUnlockedCount })],
+    ['locked', t('filter.locked', { n: total - savedUnlockedCount })],
   ]
 
   const storeStyle: CSSProperties = {

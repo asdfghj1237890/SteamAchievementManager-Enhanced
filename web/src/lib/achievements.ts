@@ -21,17 +21,26 @@ export const sortAch = (list: Achievement[], sort: AchSort): Achievement[] => {
 export const filteredAch = (
   g: Game,
   achState: AchState,
+  origAch: AchState,
   filter: AchFilter,
   search: string,
   sort: AchSort = 'default',
 ): Achievement[] => {
+  const w = achState[g.id] ?? {}
+  const o = origAch[g.id] ?? {}
   const q = search.trim().toLowerCase()
-  const list = workingAch(g, achState).filter((a) => {
-    if (filter === 'unlocked' && !a.unlocked) return false
-    if (filter === 'locked' && a.unlocked) return false
-    if (q && a.name.toLowerCase().indexOf(q) < 0 && a.desc.toLowerCase().indexOf(q) < 0) return false
-    return true
-  })
+  // Partition by the SAVED (committed) unlock state, not the live working state,
+  // so toggling a row never makes it vanish from the current filter mid-edit.
+  // The working state is still applied for display (the row's check reflects it).
+  const list = g.achievements
+    .filter((a) => {
+      const saved = a.id in o ? o[a.id] : a.unlocked
+      if (filter === 'unlocked' && !saved) return false
+      if (filter === 'locked' && saved) return false
+      if (q && a.name.toLowerCase().indexOf(q) < 0 && a.desc.toLowerCase().indexOf(q) < 0) return false
+      return true
+    })
+    .map((a) => ({ ...a, unlocked: !!w[a.id] }))
   return sortAch(list, sort)
 }
 

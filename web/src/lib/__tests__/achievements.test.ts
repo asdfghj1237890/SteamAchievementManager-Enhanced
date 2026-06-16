@@ -36,14 +36,20 @@ describe('workingAch', () => {
 })
 
 describe('filteredAch', () => {
-  it('filters by unlock state', () => {
-    expect(filteredAch(game, ach(), 'unlocked', '').map((a) => a.id)).toEqual(['a0'])
-    expect(filteredAch(game, ach(), 'locked', '').map((a) => a.id)).toEqual(['a1', 'a2', 'a3'])
+  it('filters by the saved unlock state', () => {
+    expect(filteredAch(game, ach(), ach(), 'unlocked', '').map((a) => a.id)).toEqual(['a0'])
+    expect(filteredAch(game, ach(), ach(), 'locked', '').map((a) => a.id)).toEqual(['a1', 'a2', 'a3'])
+  })
+  it('keeps a toggled row in its saved partition (does not vanish mid-edit)', () => {
+    // a1 is saved-locked but unlocked in the working state → it stays under 'locked'
+    const r = filteredAch(game, ach({ a1: true }), ach(), 'locked', '')
+    expect(r.map((a) => a.id)).toEqual(['a1', 'a2', 'a3'])
+    expect(r.find((a) => a.id === 'a1')?.unlocked).toBe(true)
   })
   it('matches the search query against name and description', () => {
-    expect(filteredAch(game, ach(), 'all', 'beta').map((a) => a.id)).toEqual(['a1'])
-    expect(filteredAch(game, ach(), 'all', 'secret').map((a) => a.id)).toEqual(['a2'])
-    expect(filteredAch(game, ach(), 'all', 'nope')).toHaveLength(0)
+    expect(filteredAch(game, ach(), ach(), 'all', 'beta').map((a) => a.id)).toEqual(['a1'])
+    expect(filteredAch(game, ach(), ach(), 'all', 'secret').map((a) => a.id)).toEqual(['a2'])
+    expect(filteredAch(game, ach(), ach(), 'all', 'nope')).toHaveLength(0)
   })
 })
 

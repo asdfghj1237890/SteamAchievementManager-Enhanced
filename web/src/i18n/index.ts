@@ -77,6 +77,9 @@ const zhTW = {
 
   'ach.locked': '尚未解鎖',
   'ach.unlockedOn': '已解鎖 · {date}',
+  'ach.unlocked': '已解鎖',
+  'ach.pendingUnlock': '待解鎖',
+  'ach.pendingLock': '待鎖定',
   'ach.stateLocked': '未解鎖',
   'badge.protected': '受保護',
   'badge.hidden': '隱藏',
@@ -176,6 +179,9 @@ const zhCN: Dict = {
 
   'ach.locked': '尚未解锁',
   'ach.unlockedOn': '已解锁 · {date}',
+  'ach.unlocked': '已解锁',
+  'ach.pendingUnlock': '待解锁',
+  'ach.pendingLock': '待锁定',
   'ach.stateLocked': '未解锁',
   'badge.protected': '受保护',
   'badge.hidden': '隐藏',
@@ -272,6 +278,9 @@ const enUS: Dict = {
 
   'ach.locked': 'Not yet unlocked',
   'ach.unlockedOn': 'Unlocked · {date}',
+  'ach.unlocked': 'Unlocked',
+  'ach.pendingUnlock': 'Pending unlock',
+  'ach.pendingLock': 'Pending lock',
   'ach.stateLocked': 'Locked',
   'badge.protected': 'Protected',
   'badge.hidden': 'Hidden',
@@ -368,6 +377,9 @@ const es: Dict = {
 
   'ach.locked': 'Aún no desbloqueado',
   'ach.unlockedOn': 'Desbloqueado · {date}',
+  'ach.unlocked': 'Desbloqueado',
+  'ach.pendingUnlock': 'Desbloqueo pendiente',
+  'ach.pendingLock': 'Bloqueo pendiente',
   'ach.stateLocked': 'Bloqueado',
   'badge.protected': 'Protegido',
   'badge.hidden': 'Oculto',
@@ -464,6 +476,9 @@ const pt: Dict = {
 
   'ach.locked': 'Ainda não desbloqueada',
   'ach.unlockedOn': 'Desbloqueada · {date}',
+  'ach.unlocked': 'Desbloqueada',
+  'ach.pendingUnlock': 'Desbloqueio pendente',
+  'ach.pendingLock': 'Bloqueio pendente',
   'ach.stateLocked': 'Bloqueada',
   'badge.protected': 'Protegida',
   'badge.hidden': 'Oculta',
@@ -560,6 +575,9 @@ const fr: Dict = {
 
   'ach.locked': 'Pas encore débloqué',
   'ach.unlockedOn': 'Débloqué · {date}',
+  'ach.unlocked': 'Débloqué',
+  'ach.pendingUnlock': 'Déblocage en attente',
+  'ach.pendingLock': 'Blocage en attente',
   'ach.stateLocked': 'Verrouillé',
   'badge.protected': 'Protégé',
   'badge.hidden': 'Caché',
@@ -656,6 +674,9 @@ const de: Dict = {
 
   'ach.locked': 'Noch nicht freigeschaltet',
   'ach.unlockedOn': 'Freigeschaltet · {date}',
+  'ach.unlocked': 'Freigeschaltet',
+  'ach.pendingUnlock': 'Freischaltung ausstehend',
+  'ach.pendingLock': 'Sperrung ausstehend',
   'ach.stateLocked': 'Gesperrt',
   'badge.protected': 'Geschützt',
   'badge.hidden': 'Versteckt',
@@ -752,6 +773,9 @@ const it: Dict = {
 
   'ach.locked': 'Non ancora sbloccato',
   'ach.unlockedOn': 'Sbloccato · {date}',
+  'ach.unlocked': 'Sbloccato',
+  'ach.pendingUnlock': 'Sblocco in sospeso',
+  'ach.pendingLock': 'Blocco in sospeso',
   'ach.stateLocked': 'Bloccato',
   'badge.protected': 'Protetto',
   'badge.hidden': 'Nascosto',
@@ -848,6 +872,9 @@ const ja: Dict = {
 
   'ach.locked': 'まだ解除されていません',
   'ach.unlockedOn': '解除済み · {date}',
+  'ach.unlocked': '解除済み',
+  'ach.pendingUnlock': '解除予定',
+  'ach.pendingLock': 'ロック予定',
   'ach.stateLocked': '未解除',
   'badge.protected': '保護',
   'badge.hidden': '隠し',
@@ -944,6 +971,9 @@ const ko: Dict = {
 
   'ach.locked': '아직 해제되지 않음',
   'ach.unlockedOn': '해제됨 · {date}',
+  'ach.unlocked': '해제됨',
+  'ach.pendingUnlock': '해제 예정',
+  'ach.pendingLock': '잠금 예정',
   'ach.stateLocked': '미해제',
   'badge.protected': '보호됨',
   'badge.hidden': '숨김',
