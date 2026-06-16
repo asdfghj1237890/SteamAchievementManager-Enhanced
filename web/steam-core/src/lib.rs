@@ -915,6 +915,9 @@ pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
 #[cfg(windows)]
 pub use imp::completion_local;
 
+#[cfg(target_os = "macos")]
+mod imp_macos;
+
 // ---- Non-Windows fallbacks so the crate still type-checks off-platform. ----
 #[cfg(not(windows))]
 pub struct SteamClient;

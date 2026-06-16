@@ -1,0 +1,188 @@
+//! macOS port of the internal-steamclient read layer. Loads steamclient.dylib
+//! via dlopen and mirrors the read surface of the Windows `imp` module. Writes
+//! are deferred this milestone (see lib.rs `write_game`).
+
+use super::{AchievementInfo, GameStats, OwnedGame, StatInfo};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::time::{Duration, Instant};
+
+#[allow(non_snake_case)]
+extern "C" {
+    fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dlerror() -> *const c_char;
+}
+const RTLD_NOW: c_int = 0x2;
+
+/// k_iSteamUserStatsCallbacks (1100) + 1
+const USER_STATS_RECEIVED: i32 = 1101;
+
+#[repr(C)]
+#[allow(dead_code)] // fields are FFI layout, not all read
+struct CallbackMsg {
+    user: i32,
+    id: i32,
+    param: *mut u8,
+    param_size: i32,
+}
+
+/// Read vtable slot `index` of a C++ object and reinterpret it as fn pointer `T`.
+unsafe fn vfn<T: Copy>(obj: *mut c_void, index: usize) -> T {
+    let vtbl = *(obj as *const *const *const c_void);
+    let f = *vtbl.add(index);
+    std::mem::transmute_copy::<*const c_void, T>(&f)
+}
+
+unsafe fn cstr(p: *const c_char) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    CStr::from_ptr(p).to_string_lossy().into_owned()
+}
+
+unsafe fn last_dlerror() -> String {
+    let e = dlerror();
+    if e.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(e).to_string_lossy().into_owned()
+    }
+}
+
+/// Steam root on macOS: ~/Library/Application Support/Steam (must exist).
+fn steam_root() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let root = format!("{home}/Library/Application Support/Steam");
+    if std::path::Path::new(&root).is_dir() {
+        Some(root)
+    } else {
+        None
+    }
+}
+
+fn dylib_path(root: &str) -> String {
+    format!("{root}/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib")
+}
+
+fn schema_path(root: &str, app_id: u32) -> String {
+    format!("{root}/appcache/stats/UserGameStatsSchema_{app_id}.bin")
+}
+
+fn user_stats_path(root: &str, account_id: u32, app_id: u32) -> String {
+    format!("{root}/appcache/stats/UserGameStats_{account_id}_{app_id}.bin")
+}
+
+fn find_account_id(root: &str) -> Option<u32> {
+    for entry in std::fs::read_dir(format!("{root}/userdata")).ok()?.flatten() {
+        if let Some(id) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) {
+            if id != 0 {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+struct StatDef {
+    id: String,
+    name: String,
+    is_float: bool,
+    permission: i32,
+    increment_only: bool,
+}
+
+fn resolve_stat_type(stat: &super::Kv) -> u8 {
+    let raw = stat
+        .child("type")
+        .map(|n| {
+            if let Some(s) = n.as_str() {
+                s.parse::<i32>().unwrap_or_else(|_| match s.to_ascii_lowercase().as_str() {
+                    "integer" | "int" => 1,
+                    "float" => 2,
+                    "averagerate" => 3,
+                    "achievements" => 4,
+                    "groupachievements" => 5,
+                    _ => 0,
+                })
+            } else {
+                n.as_int()
+            }
+        })
+        .unwrap_or(0);
+    let raw = if raw == 0 {
+        stat.child("type_int").map(|n| n.as_int()).unwrap_or(0)
+    } else {
+        raw
+    };
+    match raw {
+        1 => 1,      // Integer
+        2 | 3 => 2,  // Float / AverageRate
+        _ => 0,
+    }
+}
+
+fn resolve_display_name(stat: &super::Kv, lang: &str, fallback: &str) -> String {
+    let Some(name_node) = stat.child("display").and_then(|d| d.child("name")) else {
+        return fallback.to_string();
+    };
+    if let Some(s) = name_node.as_str() {
+        return s.to_string();
+    }
+    name_node
+        .child(lang)
+        .and_then(|c| c.as_str())
+        .or_else(|| name_node.child("english").and_then(|c| c.as_str()))
+        .or_else(|| name_node.children.iter().find_map(|c| c.as_str()))
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+/// For each child of `node`, count the children of its `key` sub-node. Sum.
+fn count_children(node: &super::Kv, key: &str) -> u32 {
+    node.children
+        .iter()
+        .filter_map(|c| c.child(key))
+        .map(|g| g.children.len() as u32)
+        .sum()
+}
+
+/// Completion (earned, total) read straight from Steam's local cache files —
+/// NO Steam connection, so it never launches the game.
+pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
+    let root = steam_root()?;
+
+    let schema = std::fs::read(schema_path(&root, app_id)).ok()?;
+    let schema_kv = super::parse_kv(&schema)?;
+    let stats = schema_kv.child(&app_id.to_string())?.child("stats")?;
+    let total = count_children(stats, "bits");
+    if total == 0 {
+        return None;
+    }
+
+    let earned = find_account_id(&root)
+        .and_then(|account_id| std::fs::read(user_stats_path(&root, account_id, app_id)).ok())
+        .and_then(|d| super::parse_kv(&d))
+        .and_then(|kv| kv.child("cache").map(|c| count_children(c, "AchievementTimes")))
+        .unwrap_or(0);
+
+    Some((earned.min(total), total))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dylib_path, schema_path, user_stats_path};
+
+    #[test]
+    fn dylib_path_is_under_appbundle() {
+        assert_eq!(
+            dylib_path("/S"),
+            "/S/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"
+        );
+    }
+
+    #[test]
+    fn cache_paths_use_forward_slashes() {
+        assert_eq!(schema_path("/S", 42), "/S/appcache/stats/UserGameStatsSchema_42.bin");
+        assert_eq!(user_stats_path("/S", 7, 42), "/S/appcache/stats/UserGameStats_7_42.bin");
+    }
+}
