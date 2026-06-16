@@ -3,19 +3,23 @@ import { useApp } from '../state/AppContext'
 import { completion, filteredAch, pendingCount, type BulkMode } from '../lib/achievements'
 import { enrichAchievement } from '../lib/achievementView'
 import type { I18nKey } from '../i18n'
-import type { AchFilter, ViewMode } from '../types'
+import type { AchFilter, AchSort, ViewMode } from '../types'
 import Seg from './ui/Seg'
 import AchIcon from './ui/AchIcon'
 
 const VIEW_BTNS: [ViewMode, I18nKey][] = [['grid', 'view.grid'], ['list', 'view.list']]
 const BULK_BTNS: [BulkMode, I18nKey][] = [['unlock', 'bulk.unlock'], ['lock', 'bulk.lock'], ['invert', 'bulk.invert']]
+const SORT_OPTS: [AchSort, I18nKey][] = [
+  ['default', 'sort.default'], ['rarity', 'sort.rarity'], ['common', 'sort.common'],
+  ['name', 'sort.name'], ['unlock', 'sort.unlock'],
+]
 
 export default function Achievements() {
   const { state, t, activeGame: g, set, bulk, store, toggleAch } = useApp()
   if (!g) return null
 
   const { earned: unlockedCount, total } = completion(g, state.achState)
-  const filtered = filteredAch(g, state.achState, state.filter, state.achSearch)
+  const filtered = filteredAch(g, state.achState, state.filter, state.achSearch, state.sort)
   const views = filtered.map((a) => enrichAchievement(g, a, t))
   const pending = pendingCount(g, state.achState, state.origAch, state.statState, state.origStat)
 
@@ -52,6 +56,26 @@ export default function Achievements() {
               {label}
             </Seg>
           ))}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <span style={{ color: 'var(--t3)', fontSize: '14px' }} aria-hidden>⇅</span>
+          <select
+            value={state.sort}
+            onChange={(e) => set({ sort: e.target.value as AchSort })}
+            title={t('ach.sortBy')}
+            aria-label={t('ach.sortBy')}
+            style={{
+              padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
+              background: 'var(--s2)', color: 'var(--t1)', fontSize: '12.5px', fontFamily: 'inherit',
+              cursor: 'pointer', outline: 'none',
+            }}
+          >
+            {SORT_OPTS.map(([k, key]) => (
+              <option key={k} value={k}>
+                {t(key)}
+              </option>
+            ))}
+          </select>
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: '6px' }}>
@@ -94,7 +118,7 @@ export default function Achievements() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: 'auto' }}>
                   <span style={ach.stateStyle}>{ach.stateText}</span>
                   {ach.showBadge && <span style={ach.badgeStyle}>{ach.badgeText}</span>}
-                  <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)' }}>{ach.rarityText}</span>
+                  <span style={{ marginLeft: 'auto', flex: '0 0 auto', whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)' }}>{ach.rarityText}</span>
                 </div>
               </div>
             ))}
@@ -110,7 +134,7 @@ export default function Achievements() {
                   <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ach.name}</div>
                   <div style={{ fontSize: '11.5px', color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ach.desc}</div>
                 </div>
-                <span style={{ fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)', width: '78px', textAlign: 'right', flex: '0 0 auto' }}>{ach.rarityText}</span>
+                <span style={{ fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)', width: '78px', textAlign: 'right', flex: '0 0 auto', whiteSpace: 'nowrap' }}>{ach.rarityText}</span>
                 <span style={ach.stateStyle}>{ach.stateText}</span>
               </div>
             ))}

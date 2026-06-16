@@ -1,5 +1,5 @@
 import type {
-  AchFilter, AchState, Game, GameSummary, Platform, StatState, Theme, TypeFilter, ViewMode,
+  AchFilter, AchSort, AchState, Game, GameSummary, Platform, StatState, Theme, TypeFilter, ViewMode,
 } from '../types'
 import { DEFAULT_ACCENT } from '../lib/theme'
 import { detectLang, type Lang } from '../i18n'
@@ -21,6 +21,7 @@ export interface AppState {
   lang: Lang
   view: ViewMode
   filter: AchFilter
+  sort: AchSort
   achSearch: string
   gameSearch: string
   typeFilter: TypeFilter
@@ -72,6 +73,7 @@ export function makeInitialState(): AppState {
     lang: saved.lang ?? detectLang(),
     view: 'grid',
     filter: 'all',
+    sort: 'default',
     achSearch: '',
     gameSearch: '',
     typeFilter: 'all',

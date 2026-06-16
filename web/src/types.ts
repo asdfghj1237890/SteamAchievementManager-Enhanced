@@ -6,6 +6,8 @@ export type Screen = 'library' | 'game' | 'settings'
 export type ViewMode = 'grid' | 'list'
 export type Tab = 'ach' | 'stats'
 export type AchFilter = 'all' | 'unlocked' | 'locked'
+/** Achievement ordering: default (Steam order), rarity % (rare/common), name, or unlock time. */
+export type AchSort = 'default' | 'rarity' | 'common' | 'name' | 'unlock'
 export type GameType = 'normal' | 'demo' | 'mod'
 export type TypeFilter = 'all' | GameType
 

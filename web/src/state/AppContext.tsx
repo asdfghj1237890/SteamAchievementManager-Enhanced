@@ -235,6 +235,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         showToast(tRef.current('toast.protectedAch'))
         return
       }
+      // Click toggles: first click checks (unlock), clicking again unchecks (lock).
       dispatch((s) => ({
         achState: { ...s.achState, [appId]: { ...s.achState[appId], [achId]: !s.achState[appId][achId] } },
       }))

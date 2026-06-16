@@ -1,4 +1,4 @@
-import type { Achievement, AchFilter, AchState, Game, StatState } from '../types'
+import type { Achievement, AchFilter, AchSort, AchState, Game, StatState } from '../types'
 
 /** Apply the live unlock overrides on top of a game's base achievements. */
 export const workingAch = (g: Game, achState: AchState): Achievement[] => {
@@ -6,20 +6,33 @@ export const workingAch = (g: Game, achState: AchState): Achievement[] => {
   return g.achievements.map((a) => ({ ...a, unlocked: !!w[a.id] }))
 }
 
-/** Achievements after the active filter + search query are applied. */
+/** Reorder a list by the chosen key (returns a new array; 'default' keeps order). */
+export const sortAch = (list: Achievement[], sort: AchSort): Achievement[] => {
+  if (sort === 'default') return list
+  const out = [...list]
+  if (sort === 'rarity') out.sort((a, b) => a.rarity - b.rarity) // rarest (lowest %) first
+  else if (sort === 'common') out.sort((a, b) => b.rarity - a.rarity) // most common (highest %) first
+  else if (sort === 'name') out.sort((a, b) => a.name.localeCompare(b.name))
+  else if (sort === 'unlock') out.sort((a, b) => (b.unlockTime ?? 0) - (a.unlockTime ?? 0)) // newest first
+  return out
+}
+
+/** Achievements after the active filter + search query, then the chosen ordering. */
 export const filteredAch = (
   g: Game,
   achState: AchState,
   filter: AchFilter,
   search: string,
+  sort: AchSort = 'default',
 ): Achievement[] => {
   const q = search.trim().toLowerCase()
-  return workingAch(g, achState).filter((a) => {
+  const list = workingAch(g, achState).filter((a) => {
     if (filter === 'unlocked' && !a.unlocked) return false
     if (filter === 'locked' && a.unlocked) return false
     if (q && a.name.toLowerCase().indexOf(q) < 0 && a.desc.toLowerCase().indexOf(q) < 0) return false
     return true
   })
+  return sortAch(list, sort)
 }
 
 /** Number of unsaved changes (achievements + stats) for a game vs. the last saved snapshot. */
