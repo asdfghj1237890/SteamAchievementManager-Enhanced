@@ -398,3 +398,6 @@ FodyWeavers.xsd
 # Design handoff export (Claude Design source + games.xml master list) — reference
 # scratch, not project code; the app fetches games.xml at runtime.
 _design_src/
+
+# Superpowers planning/spec scratch — local design notes, not shipped project code.
+docs/superpowers/
