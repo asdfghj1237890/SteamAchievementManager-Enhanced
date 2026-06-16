@@ -59,12 +59,15 @@ cd web
 cargo tauri dev   # builds src-tauri + loads the Vite UI in a desktop window
 ```
 
-Supported live today: **Windows** (read + write) and **macOS / Apple Silicon**
-(read only — list games, read achievements/stats). Writing achievements/stats is
-not yet implemented on macOS and returns a clear error
-(`macOS 寫入支援尚在開發（本階段僅讀取）`). On macOS, `steamclient.dylib` is
-loaded via `dlopen` (see `steam-core/src/imp_macos.rs`); the Windows path is
-unchanged.
+Supported live today on **Windows** and **macOS / Apple Silicon**: list games,
+read achievements/stats, and **write** (unlock/clear achievements, set stats,
+StoreStats). On macOS, `steamclient.dylib` is loaded via `dlopen` (see
+`steam-core/src/imp_macos.rs`); the Windows path is unchanged.
+
+**Writing is irreversible** — unlocking/clearing achievements and editing stats
+changes your real Steam account immediately. The macOS write path was validated
+with an idempotent re-set of an already-unlocked achievement (no net change);
+clearing achievements is the user's to verify.
 
 ### Read-only Steam smoke test (safe)
 Before the desktop app, you can verify the Steam FFI in isolation. These connect
@@ -106,7 +109,7 @@ web/
 | `steam-core` FFI (client init, owned-games list) | **Windows + macOS (arm64)**: live-validated. macOS via `dlopen` (`imp_macos`); owned-games + per-game achievement read confirmed against running Steam (`cargo run --bin probe <appid>`, `cargo run --bin read-game <appid>`) on an Apple Silicon machine |
 | Tauri app (`list_games` command + `TauriSource`) | wired; `cargo check`/`cargo build` verified on Windows + macOS |
 | `loadGame` (achievement read) | **live on Windows + macOS** (ISteamUserStats013: RequestUserStats / GetAchievement* / stats) |
-| `saveChanges` (achievement write) | **Windows only**. macOS write path deferred — returns a clear "not yet" error this milestone (next slice: SetAchievement/StoreStats on macOS, user-verified) |
+| `saveChanges` (achievement write) | **live on Windows + macOS** (ISteamUserStats013: SetAchievement/ClearAchievement/SetStat/StoreStats). macOS validated via an idempotent re-set; clears are user-verified |
 
 **Important:** unlocking achievements / editing stats writes irreversibly to your
 real Steam account. Those paths are the user's to run and verify; this repo does

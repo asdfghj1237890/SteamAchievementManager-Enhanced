@@ -2,7 +2,7 @@
 //! via dlopen and mirrors the read surface of the Windows `imp` module. Writes
 //! are deferred this milestone (see lib.rs `write_game`).
 
-use super::{AchievementInfo, GameStats, OwnedGame, StatInfo};
+use super::{AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatInfo};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::time::{Duration, Instant};
 
@@ -554,6 +554,67 @@ impl SteamClient {
                 }
             }
             Ok((earned, total))
+        }
+    }
+
+    pub fn write_stats(
+        &self,
+        app_id: u32,
+        ach_changes: &[AchChange],
+        stat_changes: &[StatChange],
+    ) -> Result<u32, String> {
+        unsafe {
+            let stats = self.prepare_stats()?;
+            let set_ach: extern "C" fn(*mut c_void, *const c_char) -> u8 = vfn(stats, 6);
+            let clear_ach: extern "C" fn(*mut c_void, *const c_char) -> u8 = vfn(stats, 7);
+            let store: extern "C" fn(*mut c_void) -> u8 = vfn(stats, 9);
+
+            let set_int: extern "C" fn(*mut c_void, *const c_char, i32) -> u8 = vfn(stats, 3);
+            let set_float: extern "C" fn(*mut c_void, *const c_char, f32) -> u8 = vfn(stats, 2);
+
+            let mut applied = 0u32;
+            for ch in ach_changes {
+                let idc = match CString::new(ch.id.clone()) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let ok = if ch.unlock {
+                    set_ach(stats, idc.as_ptr())
+                } else {
+                    clear_ach(stats, idc.as_ptr())
+                };
+                if ok != 0 {
+                    applied += 1;
+                }
+            }
+
+            if !stat_changes.is_empty() {
+                let floats: std::collections::HashSet<String> = self
+                    .read_stat_defs(app_id)
+                    .into_iter()
+                    .filter(|d| d.is_float)
+                    .map(|d| d.id)
+                    .collect();
+                for sc in stat_changes {
+                    let idc = match CString::new(sc.id.clone()) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    let ok = if floats.contains(&sc.id) {
+                        set_float(stats, idc.as_ptr(), sc.value as f32)
+                    } else {
+                        set_int(stats, idc.as_ptr(), sc.value as i32)
+                    };
+                    if ok != 0 {
+                        applied += 1;
+                    }
+                }
+            }
+
+            if store(stats) == 0 {
+                return Err("StoreStats 失敗（變更未寫入）".into());
+            }
+            Ok(applied)
         }
     }
 }
