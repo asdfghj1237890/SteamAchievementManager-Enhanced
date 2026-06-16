@@ -168,6 +168,141 @@ pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
     Some((earned.min(total), total))
 }
 
+pub struct SteamClient {
+    #[allow(dead_code)] // kept alive for the process lifetime; dlclose intentionally skipped
+    module: *mut c_void,
+    client: *mut c_void,
+    pipe: i32,
+    user: i32,
+    apps008: *mut c_void,
+    apps001: *mut c_void,
+    root: String,
+}
+
+impl SteamClient {
+    pub fn connect() -> Result<Self, String> {
+        let root = steam_root().ok_or("找不到 Steam 安裝路徑（請確認已安裝 Steam）")?;
+        unsafe {
+            let dylib = dylib_path(&root);
+            if !std::path::Path::new(&dylib).exists() {
+                return Err(format!("找不到 {dylib}"));
+            }
+            let c_path = CString::new(dylib.clone()).map_err(|e| e.to_string())?;
+            let module = dlopen(c_path.as_ptr(), RTLD_NOW);
+            if module.is_null() {
+                return Err(format!("無法載入 {dylib}：{}", last_dlerror()));
+            }
+
+            let create_name = CString::new("CreateInterface").unwrap();
+            let create_ptr = dlsym(module, create_name.as_ptr());
+            if create_ptr.is_null() {
+                return Err("steamclient.dylib 缺少 CreateInterface 匯出".into());
+            }
+            type CreateInterface = unsafe extern "C" fn(*const c_char, *mut i32) -> *mut c_void;
+            let create: CreateInterface = std::mem::transmute_copy(&create_ptr);
+
+            let ver = CString::new("SteamClient018").unwrap();
+            let client = create(ver.as_ptr(), std::ptr::null_mut());
+            if client.is_null() {
+                return Err("建立 ISteamClient018 失敗".into());
+            }
+
+            let create_pipe: extern "C" fn(*mut c_void) -> i32 = vfn(client, 0);
+            let pipe = create_pipe(client);
+            if pipe == 0 {
+                return Err("CreateSteamPipe 失敗（Steam 可能未啟動）".into());
+            }
+
+            let connect: extern "C" fn(*mut c_void, i32) -> i32 = vfn(client, 2);
+            let user = connect(client, pipe);
+            if user == 0 {
+                return Err("ConnectToGlobalUser 失敗（請先啟動並登入 Steam）".into());
+            }
+
+            // GetISteamApps (vtable 15) — pass `this`.
+            let get_apps: extern "C" fn(*mut c_void, i32, i32, *const c_char) -> *mut c_void =
+                vfn(client, 15);
+            let v008 = CString::new("STEAMAPPS_INTERFACE_VERSION008").unwrap();
+            let v001 = CString::new("STEAMAPPS_INTERFACE_VERSION001").unwrap();
+            let apps008 = get_apps(client, user, pipe, v008.as_ptr());
+            let apps001 = get_apps(client, user, pipe, v001.as_ptr());
+            if apps008.is_null() || apps001.is_null() {
+                return Err("取得 ISteamApps 介面失敗".into());
+            }
+
+            Ok(SteamClient { module, client, pipe, user, apps008, apps001, root })
+        }
+    }
+
+    unsafe fn export<T: Copy>(&self, name: &str) -> Result<T, String> {
+        let c = CString::new(name).unwrap();
+        let p = dlsym(self.module, c.as_ptr());
+        if p.is_null() {
+            return Err(format!("steamclient 缺少匯出 {name}"));
+        }
+        Ok(std::mem::transmute_copy::<*mut c_void, T>(&p))
+    }
+
+    pub fn is_subscribed(&self, app_id: u32) -> bool {
+        unsafe {
+            let f: extern "C" fn(*mut c_void, u32) -> u8 = vfn(self.apps008, 6);
+            f(self.apps008, app_id) != 0
+        }
+    }
+
+    pub fn app_data(&self, app_id: u32, key: &str) -> Option<String> {
+        unsafe {
+            let f: extern "C" fn(*mut c_void, u32, *const c_char, *mut c_char, i32) -> i32 =
+                vfn(self.apps001, 0);
+            let k = CString::new(key).ok()?;
+            let mut buf = vec![0u8; 1024];
+            let n = f(self.apps001, app_id, k.as_ptr(), buf.as_mut_ptr() as *mut c_char, buf.len() as i32);
+            if n == 0 {
+                return None;
+            }
+            let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+            Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+        }
+    }
+
+    pub fn owned_games(&self, candidates: &[u32]) -> Vec<OwnedGame> {
+        candidates
+            .iter()
+            .copied()
+            .filter(|&id| self.is_subscribed(id))
+            .map(|id| OwnedGame {
+                app_id: id,
+                name: self.app_data(id, "name").unwrap_or_else(|| id.to_string()),
+                kind: "normal".into(),
+            })
+            .collect()
+    }
+
+    pub fn owned_games_typed(&self, entries: &[(u32, String)]) -> Vec<OwnedGame> {
+        entries
+            .iter()
+            .filter(|(id, _)| self.is_subscribed(*id))
+            .map(|(id, kind)| OwnedGame {
+                app_id: *id,
+                name: self.app_data(*id, "name").unwrap_or_else(|| id.to_string()),
+                kind: if kind.is_empty() { "normal".into() } else { kind.clone() },
+            })
+            .collect()
+    }
+}
+
+impl Drop for SteamClient {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.client.is_null() && self.pipe != 0 {
+                // ReleaseSteamPipe (vtable 1)
+                let f: extern "C" fn(*mut c_void, i32) -> u8 = vfn(self.client, 1);
+                let _ = f(self.client, self.pipe);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{dylib_path, schema_path, user_stats_path};
