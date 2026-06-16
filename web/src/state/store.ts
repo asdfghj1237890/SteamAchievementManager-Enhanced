@@ -25,6 +25,9 @@ export interface AppState {
   achSearch: string
   gameSearch: string
   typeFilter: TypeFilter
+  /** Player's own Steam library categories (appId -> category names) + active filter. */
+  categories: Record<string, string[]>
+  categoryFilter: string
   statsEditing: boolean
   addId: string
   /** Game-list (sidebar) width in px; drag-resizable, persisted in settings. */
@@ -68,8 +71,10 @@ export function makeInitialState(): AppState {
   const saved = loadSettings()
   return {
     theme: saved.theme ?? 'dark',
-    platform: saved.platform ?? detectPlatform(),
-    accent: saved.accent ?? DEFAULT_ACCENT,
+    // Window chrome follows the host OS only — no user override.
+    platform: detectPlatform(),
+    // Fixed brand accent — not user-configurable.
+    accent: DEFAULT_ACCENT,
     lang: saved.lang ?? detectLang(),
     view: 'grid',
     filter: 'all',
@@ -77,6 +82,8 @@ export function makeInitialState(): AppState {
     achSearch: '',
     gameSearch: '',
     typeFilter: 'all',
+    categories: {},
+    categoryFilter: 'all',
     statsEditing: false,
     addId: '',
     sidebarWidth: clampSidebar(saved.sidebarWidth ?? 280),

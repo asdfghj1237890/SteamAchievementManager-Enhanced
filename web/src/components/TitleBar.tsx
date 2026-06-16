@@ -1,34 +1,42 @@
-import type { CSSProperties, MouseEvent } from 'react'
+import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useApp } from '../state/AppContext'
 import { useHover } from '../lib/useHover'
 import { winClose, winMinimize, winToggleMaximize } from '../lib/appWindow'
+import BrandMark from './ui/BrandMark'
 
 // Stop drag-region mousedown so the control still registers a click.
 const noDrag = (e: MouseEvent) => e.stopPropagation()
 
 function WinCtrl({
-  glyph, fontSize, close = false, onClick,
+  icon, label, close = false, onClick,
 }: {
-  glyph: string
-  fontSize: string
+  icon: ReactNode
+  label: string
   close?: boolean
   onClick: () => void
 }) {
   const { hover, hoverProps } = useHover()
   const style: CSSProperties = {
     width: '46px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-    fontSize,
     color: hover ? (close ? '#fff' : 'var(--t1)') : 'var(--t2)',
     background: hover ? (close ? '#e81123' : 'var(--s3)') : 'transparent',
     transition: 'background .12s, color .12s',
   }
   return (
-    <div style={style} {...hoverProps} onMouseDown={noDrag} onClick={onClick}>
-      {glyph}
+    <div style={style} {...hoverProps} onMouseDown={noDrag} onClick={onClick} role="button" aria-label={label}>
+      {icon}
     </div>
   )
 }
+
+// All three controls share one 11×11 box and a 1px stroke so their proportions
+// match (the old unicode glyphs — ─ ▢ ✕ — had mismatched metrics).
+const winIcon = (paths: ReactNode): ReactNode => (
+  <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" aria-hidden>
+    {paths}
+  </svg>
+)
 
 function MacDot({
   bg, glyph, show, onClick,
@@ -112,15 +120,7 @@ export default function TitleBar() {
           flex: 1, overflow: 'hidden', pointerEvents: 'none',
         }}
       >
-        <div
-          style={{
-            width: '16px', height: '16px', borderRadius: '4px', background: 'var(--accent)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
-            fontSize: '9px', fontWeight: 800, flex: '0 0 auto',
-          }}
-        >
-          ★
-        </div>
+        <BrandMark size={18} />
         <span
           style={{
             fontSize: '12px', fontWeight: 600, color: 'var(--t2)', whiteSpace: 'nowrap',
@@ -131,9 +131,27 @@ export default function TitleBar() {
         </span>
       </div>
       <div style={{ display: 'flex' }}>
-        <WinCtrl glyph="─" fontSize="14px" onClick={winMinimize} />
-        <WinCtrl glyph="▢" fontSize="11px" onClick={winToggleMaximize} />
-        <WinCtrl glyph="✕" fontSize="13px" close onClick={winClose} />
+        <WinCtrl
+          label="Minimize"
+          onClick={winMinimize}
+          icon={winIcon(<line x1="1" y1="5.5" x2="10" y2="5.5" strokeWidth="1" />)}
+        />
+        <WinCtrl
+          label="Maximize"
+          onClick={winToggleMaximize}
+          icon={winIcon(<rect x="1" y="1" width="9" height="9" rx="0.5" strokeWidth="1" />)}
+        />
+        <WinCtrl
+          label="Close"
+          close
+          onClick={winClose}
+          icon={winIcon(
+            <>
+              <line x1="1.4" y1="1.4" x2="9.6" y2="9.6" strokeWidth="1.1" />
+              <line x1="9.6" y1="1.4" x2="1.4" y2="9.6" strokeWidth="1.1" />
+            </>,
+          )}
+        />
       </div>
     </div>
   )

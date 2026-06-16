@@ -22,8 +22,10 @@ export const styleTokens = (): StyleTokens => ({
   meta: "'IBM Plex Mono',ui-monospace,monospace", elev: 'var(--shadow)',
 })
 
-export const ACCENT_OPTIONS = ['#2b9bff', '#3ad07f', '#a855f7', '#ff8c1a', '#ff5d73']
-export const DEFAULT_ACCENT = '#2b9bff'
+// The app's single accent — the logo red (brightened from the trophy squircle's
+// base so progress bars stay legible on the dark theme). Used for selection,
+// progress, and primary buttons. Not user-configurable.
+export const DEFAULT_ACCENT = '#cf3a50'
 
 /** Build the CSS custom properties + base styles for the root container. */
 export function rootCssVars(T: ThemeTokens, ST: StyleTokens, accent: string): CSSProperties {

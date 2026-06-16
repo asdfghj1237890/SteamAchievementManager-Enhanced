@@ -1,5 +1,5 @@
 import type { Lang } from '../i18n'
-import type { GameSummary, Platform, Theme } from '../types'
+import type { GameSummary, Theme } from '../types'
 
 // Persisted games list (with completions) so repeat launches show instantly,
 // then refresh in the background. Tauri's webview localStorage survives restarts.
@@ -7,8 +7,6 @@ const KEY = 'sam-games-cache-v1'
 
 export interface PersistedSettings {
   theme?: Theme
-  platform?: Platform
-  accent?: string
   sidebarWidth?: number
   lang?: Lang
 }

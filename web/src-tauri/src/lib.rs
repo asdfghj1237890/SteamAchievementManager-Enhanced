@@ -113,6 +113,38 @@ async fn game_progress(app_id: String) -> Result<Progress, String> {
     .map_err(|e| e.to_string())?
 }
 
+#[derive(serde::Serialize)]
+struct AppCategories {
+    app_id: u32,
+    categories: Vec<String>,
+}
+
+/// The user's Steam library categories per owned app, read from sharedconfig.vdf
+/// (read-only, in-process — no Steam connection).
+#[tauri::command]
+async fn game_categories() -> Result<Vec<AppCategories>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        steam_core::read_categories()
+            .into_iter()
+            .map(|(app_id, categories)| AppCategories { app_id, categories })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Resolve a game's real header-image URL via the Steam appdetails API (for newer
+/// games whose art lives at unguessable content-hash paths). Network read-only.
+#[tauri::command]
+async fn game_header(app_id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let id: u32 = app_id.parse().map_err(|_| "無效的 appId".to_string())?;
+        steam_core::fetch_header_url(id).ok_or_else(|| "找不到封面".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---------- worker entrypoint (called from main when `--steam-worker`) ----------
 pub fn worker_main(args: &[String]) {
     match run_worker(args) {
@@ -164,7 +196,14 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_games, load_game, save_changes, game_progress])
+        .invoke_handler(tauri::generate_handler![
+            list_games,
+            load_game,
+            save_changes,
+            game_progress,
+            game_categories,
+            game_header
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

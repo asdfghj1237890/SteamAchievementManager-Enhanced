@@ -32,4 +32,9 @@ export interface SamSource {
    * opening each game. The real source loads these lazily in the background.
    */
   loadProgress?(appId: string): Promise<GameCompletion>
+  /**
+   * Optional: the user's own Steam library categories, keyed by app id. Used to
+   * filter the sidebar by the player's own organization (real source only).
+   */
+  loadCategories?(): Promise<Record<string, string[]>>
 }

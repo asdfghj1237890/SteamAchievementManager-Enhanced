@@ -56,6 +56,26 @@ pub fn fetch_app_list() -> Result<Vec<(u32, String)>, String> {
     }
 }
 
+/// Resolve a game's real header-image URL via Steam's appdetails API. Newer games
+/// serve art from content-hash paths that can't be guessed from the appid, so this
+/// is the only reliable source for them. Network read-only; None on any failure.
+pub fn fetch_header_url(app_id: u32) -> Option<String> {
+    let url = format!("https://store.steampowered.com/api/appdetails?appids={app_id}&filters=basic");
+    let body = ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let header = v
+        .get(app_id.to_string())?
+        .get("data")?
+        .get("header_image")?
+        .as_str()?;
+    (!header.is_empty()).then(|| header.to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AchievementInfo {
     /// Steam achievement API name (stable id).
@@ -390,6 +410,177 @@ mod imp {
             .unwrap_or(0);
 
         Some((earned.min(total), total))
+    }
+
+    // ---- user library categories (parsed from sharedconfig.vdf, a text VDF) ----
+
+    enum VdfVal {
+        Str(String),
+        Obj(Vec<(String, VdfVal)>),
+    }
+
+    /// Tokenize text VDF into quoted-string / `{` / `}` tokens (skips `//` comments).
+    fn vdf_tokens(s: &str) -> Vec<String> {
+        let b = s.as_bytes();
+        let mut i = 0usize;
+        let mut out = Vec::new();
+        while i < b.len() {
+            match b[i] {
+                b'"' => {
+                    i += 1;
+                    let start = i;
+                    while i < b.len() && b[i] != b'"' {
+                        if b[i] == b'\\' {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                    out.push(s[start..i.min(s.len())].to_string());
+                    i += 1;
+                }
+                b'{' => {
+                    out.push("{".into());
+                    i += 1;
+                }
+                b'}' => {
+                    out.push("}".into());
+                    i += 1;
+                }
+                b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
+                    while i < b.len() && b[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+        out
+    }
+
+    fn parse_vdf(tokens: &[String], pos: &mut usize) -> Vec<(String, VdfVal)> {
+        let mut out = Vec::new();
+        while *pos < tokens.len() {
+            if tokens[*pos] == "}" {
+                *pos += 1;
+                break;
+            }
+            let key = tokens[*pos].clone();
+            *pos += 1;
+            if *pos >= tokens.len() {
+                break;
+            }
+            if tokens[*pos] == "{" {
+                *pos += 1;
+                out.push((key, VdfVal::Obj(parse_vdf(tokens, pos))));
+            } else {
+                out.push((key, VdfVal::Str(tokens[*pos].clone())));
+                *pos += 1;
+            }
+        }
+        out
+    }
+
+    /// First object anywhere under `node` with the given key (case-insensitive).
+    fn vdf_find<'a>(node: &'a [(String, VdfVal)], key: &str) -> Option<&'a Vec<(String, VdfVal)>> {
+        for (k, v) in node {
+            if let VdfVal::Obj(children) = v {
+                if k.eq_ignore_ascii_case(key) {
+                    return Some(children);
+                }
+                if let Some(found) = vdf_find(children, key) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    fn vdf_child<'a>(node: &'a [(String, VdfVal)], key: &str) -> Option<&'a Vec<(String, VdfVal)>> {
+        node.iter().find_map(|(k, v)| match v {
+            VdfVal::Obj(c) if k.eq_ignore_ascii_case(key) => Some(c),
+            _ => None,
+        })
+    }
+
+    /// Merge the user's modern library Collections (cloud-storage JSON) with the
+    /// legacy sharedconfig.vdf categories into appId -> category names.
+    fn collect_categories(
+        install: &str,
+        account: u32,
+        map: &mut std::collections::HashMap<u32, std::collections::BTreeSet<String>>,
+    ) {
+        // 1) Modern Collections: config/cloudstorage/cloud-storage-namespace-1.json
+        //    is a JSON array of [key, entry]; each `user-collections.*` entry has a
+        //    JSON `value` string of { name, added: [appid, ...] }. Manual collections
+        //    list their apps; pure dynamic (filter) collections have no `added`.
+        let json = format!(
+            r"{install}\userdata\{account}\config\cloudstorage\cloud-storage-namespace-1.json"
+        );
+        if let Ok(txt) = std::fs::read_to_string(&json) {
+            if let Ok(root) = serde_json::from_str::<serde_json::Value>(&txt) {
+                for pair in root.as_array().into_iter().flatten() {
+                    let Some(p) = pair.as_array() else { continue };
+                    let Some(key) = p.first().and_then(|k| k.as_str()) else { continue };
+                    if !key.starts_with("user-collections.") {
+                        continue;
+                    }
+                    let Some(vs) = p.get(1).and_then(|e| e.get("value")).and_then(|v| v.as_str())
+                    else {
+                        continue;
+                    };
+                    let Ok(coll) = serde_json::from_str::<serde_json::Value>(vs) else { continue };
+                    let Some(name) = coll.get("name").and_then(|n| n.as_str()) else { continue };
+                    if name.is_empty() {
+                        continue;
+                    }
+                    for app in coll.get("added").and_then(|a| a.as_array()).into_iter().flatten() {
+                        if let Some(id) = app.as_u64() {
+                            map.entry(id as u32).or_default().insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2) Legacy categories: userdata/<id>/7/remote/sharedconfig.vdf (apps/<id>/tags).
+        let vdf = format!(r"{install}\userdata\{account}\7\remote\sharedconfig.vdf");
+        if let Ok(txt) = std::fs::read_to_string(&vdf) {
+            let tokens = vdf_tokens(&txt);
+            let mut pos = 0;
+            let tree = parse_vdf(&tokens, &mut pos);
+            if let Some(apps) = vdf_find(&tree, "apps") {
+                for (app_str, v) in apps {
+                    let VdfVal::Obj(app) = v else { continue };
+                    let Ok(app_id) = app_str.parse::<u32>() else { continue };
+                    if let Some(tags) = vdf_child(app, "tags") {
+                        for (_, tv) in tags {
+                            if let VdfVal::Str(s) = tv {
+                                if !s.is_empty() {
+                                    map.entry(app_id).or_default().insert(s.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The user's Steam library categories per owned app — modern Collections +
+    /// legacy sharedconfig, merged. Read-only; no Steam connection.
+    pub fn read_categories() -> Vec<(u32, Vec<String>)> {
+        let Some(install) = install_path() else {
+            return Vec::new();
+        };
+        let Some(account) = find_account_id(&install) else {
+            return Vec::new();
+        };
+        let mut map: std::collections::HashMap<u32, std::collections::BTreeSet<String>> =
+            std::collections::HashMap::new();
+        collect_categories(&install, account, &mut map);
+        map.into_iter()
+            .map(|(id, set)| (id, set.into_iter().collect()))
+            .collect()
     }
 
     pub struct SteamClient {
@@ -954,6 +1145,16 @@ pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
 /// Reads files only — no Steam connection — so it never launches the game.
 #[cfg(windows)]
 pub use imp::completion_local;
+
+/// The user's Steam library categories per owned app (from sharedconfig.vdf).
+#[cfg(windows)]
+pub use imp::read_categories;
+
+/// Library categories are read from the Windows sharedconfig.vdf path; stubbed elsewhere.
+#[cfg(not(windows))]
+pub fn read_categories() -> Vec<(u32, Vec<String>)> {
+    Vec::new()
+}
 
 #[cfg(target_os = "macos")]
 mod imp_macos;

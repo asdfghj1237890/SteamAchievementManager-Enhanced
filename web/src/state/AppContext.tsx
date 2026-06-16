@@ -103,6 +103,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [source])
 
+  // ---- load the player's own Steam library categories (real source only) ----
+  useEffect(() => {
+    const loadCategories = source.loadCategories?.bind(source)
+    if (!loadCategories) return
+    let cancelled = false
+    loadCategories()
+      .then((cats) => {
+        if (!cancelled) dispatch({ categories: cats })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [source])
+
   // ---- persist the games list (with completions) for next launch ----
   useEffect(() => {
     if (isTauri() && state.gamesStatus === 'ready' && state.games.length) {
@@ -114,12 +129,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     saveSettings({
       theme: state.theme,
-      platform: state.platform,
-      accent: state.accent,
       sidebarWidth: state.sidebarWidth,
       lang: state.lang,
     })
-  }, [state.theme, state.platform, state.accent, state.sidebarWidth, state.lang])
+  }, [state.theme, state.sidebarWidth, state.lang])
 
   // ---- background-load every game's completion (real source only) ----
   useEffect(() => {
@@ -220,6 +233,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return patch
         })
       })
+      .catch(() => {})
+    // Categories can change in Steam between launches — re-read them on refresh too.
+    source
+      .loadCategories?.()
+      .then((cats) => dispatch({ categories: cats }))
       .catch(() => {})
     showToast(tRef.current('toast.refreshing'))
   }, [source, showToast])

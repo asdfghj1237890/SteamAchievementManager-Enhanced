@@ -1,0 +1,27 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8a2838"/>
+      <stop offset="0.55" stop-color="#6e1f2b"/>
+      <stop offset="1" stop-color="#3a0f17"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="330" cy="270" r="670" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#ffd672"/>
+      <stop offset="1" stop-color="#e7a838"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#sheen)"/>
+  <g transform="translate(512,505) scale(2.5)">
+    <path d="M-75,-90 L75,-90 C75,-25 48,10 0,12 C-48,10 -75,-25 -75,-90 Z" fill="url(#gold)"/>
+    <path d="M-72,-84 C-110,-82 -116,-30 -70,-12" fill="none" stroke="#f3bd47" stroke-width="15" stroke-linecap="round"/>
+    <path d="M72,-84 C110,-82 116,-30 70,-12" fill="none" stroke="#f3bd47" stroke-width="15" stroke-linecap="round"/>
+    <path d="M-13,12 L13,12 L9,42 L-9,42 Z" fill="#e0a636"/>
+    <path d="M-22,42 L22,42 L18,56 L-18,56 Z" fill="#e9b441"/>
+    <path d="M-42,58 L42,58 L54,92 L-54,92 Z" fill="#e0a636"/>
+  </g>
+</svg>

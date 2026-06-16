@@ -30,6 +30,8 @@ const zhTW = {
 
   'sidebar.count': '{visible} / {total} 款',
   'sidebar.searchGames': '搜尋遊戲…',
+  'sidebar.allCategories': '全部分類',
+  'sidebar.uncategorized': '未分類',
   'type.all': '全部',
   'type.normal': '正式',
   'type.demo': '試玩',
@@ -132,6 +134,8 @@ const zhCN: Dict = {
 
   'sidebar.count': '{visible} / {total} 款',
   'sidebar.searchGames': '搜索游戏…',
+  'sidebar.allCategories': '全部分类',
+  'sidebar.uncategorized': '未分类',
   'type.all': '全部',
   'type.normal': '正式',
   'type.demo': '试玩',
@@ -231,6 +235,8 @@ const enUS: Dict = {
 
   'sidebar.count': '{visible} / {total} games',
   'sidebar.searchGames': 'Search games…',
+  'sidebar.allCategories': 'All categories',
+  'sidebar.uncategorized': 'Uncategorized',
   'type.all': 'All',
   'type.normal': 'Full',
   'type.demo': 'Demo',
@@ -330,6 +336,8 @@ const es: Dict = {
 
   'sidebar.count': '{visible} / {total} juegos',
   'sidebar.searchGames': 'Buscar juegos…',
+  'sidebar.allCategories': 'Todas las categorías',
+  'sidebar.uncategorized': 'Sin categoría',
   'type.all': 'Todos',
   'type.normal': 'Completos',
   'type.demo': 'Demo',
@@ -429,6 +437,8 @@ const pt: Dict = {
 
   'sidebar.count': '{visible} / {total} jogos',
   'sidebar.searchGames': 'Procurar jogos…',
+  'sidebar.allCategories': 'Todas as categorias',
+  'sidebar.uncategorized': 'Sem categoria',
   'type.all': 'Todos',
   'type.normal': 'Completos',
   'type.demo': 'Demo',
@@ -528,6 +538,8 @@ const fr: Dict = {
 
   'sidebar.count': '{visible} / {total} jeux',
   'sidebar.searchGames': 'Rechercher des jeux…',
+  'sidebar.allCategories': 'Toutes les catégories',
+  'sidebar.uncategorized': 'Sans catégorie',
   'type.all': 'Tous',
   'type.normal': 'Complets',
   'type.demo': 'Démo',
@@ -627,6 +639,8 @@ const de: Dict = {
 
   'sidebar.count': '{visible} / {total} Spiele',
   'sidebar.searchGames': 'Spiele suchen…',
+  'sidebar.allCategories': 'Alle Kategorien',
+  'sidebar.uncategorized': 'Ohne Kategorie',
   'type.all': 'Alle',
   'type.normal': 'Vollversion',
   'type.demo': 'Demo',
@@ -726,6 +740,8 @@ const it: Dict = {
 
   'sidebar.count': '{visible} / {total} giochi',
   'sidebar.searchGames': 'Cerca giochi…',
+  'sidebar.allCategories': 'Tutte le categorie',
+  'sidebar.uncategorized': 'Senza categoria',
   'type.all': 'Tutti',
   'type.normal': 'Completi',
   'type.demo': 'Demo',
@@ -825,6 +841,8 @@ const ja: Dict = {
 
   'sidebar.count': '{visible} / {total} 本',
   'sidebar.searchGames': 'ゲームを検索…',
+  'sidebar.allCategories': 'すべてのカテゴリ',
+  'sidebar.uncategorized': '未分類',
   'type.all': 'すべて',
   'type.normal': '製品版',
   'type.demo': '体験版',
@@ -924,6 +942,8 @@ const ko: Dict = {
 
   'sidebar.count': '{visible} / {total}개',
   'sidebar.searchGames': '게임 검색…',
+  'sidebar.allCategories': '모든 카테고리',
+  'sidebar.uncategorized': '분류 없음',
   'type.all': '전체',
   'type.normal': '정식판',
   'type.demo': '체험판',

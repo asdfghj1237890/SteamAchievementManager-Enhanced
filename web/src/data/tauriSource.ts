@@ -110,4 +110,11 @@ export class TauriSource implements SamSource {
     const pct = r.total ? Math.round((r.earned / r.total) * 100) : 0
     return { earned: r.earned, total: r.total, pct }
   }
+
+  async loadCategories(): Promise<Record<string, string[]>> {
+    const raw = await invoke<{ app_id: number; categories: string[] }[]>('game_categories')
+    const map: Record<string, string[]> = {}
+    for (const e of raw) map[String(e.app_id)] = e.categories
+    return map
+  }
 }
