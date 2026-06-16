@@ -1,0 +1,16 @@
+# Node / Vite
+node_modules
+dist
+dist-ssr
+*.local
+.vite
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Rust (steam-core/target, src-tauri/target, gen)
+target
+gen
+
+# Logs
+*.log

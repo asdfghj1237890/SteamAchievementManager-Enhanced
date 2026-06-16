@@ -1,0 +1,47 @@
+/* Global base — ported verbatim from the Claude Design handoff <helmet> styles.
+   All color/size tokens are CSS custom properties set on .dc-root (see theme.ts). */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+input {
+  font-family: inherit;
+}
+
+input::placeholder {
+  color: var(--t3);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bd);
+  border-radius: 8px;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 14px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes dcspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
