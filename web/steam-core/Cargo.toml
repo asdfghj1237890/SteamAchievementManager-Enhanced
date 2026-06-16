@@ -8,6 +8,11 @@ description = "Local Steam client (internal steamclient.dll interfaces) read/wri
 name = "steam_core"
 path = "src/lib.rs"
 
+# Read-only ownership probe: `cargo run --bin probe <appid>...`. Never writes.
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

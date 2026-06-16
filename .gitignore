@@ -35,6 +35,11 @@ bld/
 [Ll]og/
 [Ll]ogs/
 
+# Rust source binaries live in src/bin/ — these are source, not VS build output,
+# so re-include them despite the [Bb]in/ rule above.
+!web/steam-core/src/bin/
+!web/steam-core/src/bin/**
+
 # Visual Studio 2015/2017 cache/options directory
 .vs/
 # Uncomment if you have tasks that create the project's static files in wwwroot
