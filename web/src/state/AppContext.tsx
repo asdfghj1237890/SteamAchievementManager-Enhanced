@@ -9,6 +9,7 @@ import { translate, type Translate } from '../i18n'
 import type { GameChanges } from '../data/source'
 import { reducer, makeInitialState, type Action, type AppState } from './store'
 import { applyLoadedGame } from './applyLoadedGame'
+import { applyPartialSave } from './applyPartialSave'
 import { getVersion } from '@tauri-apps/api/app'
 import { fetchLatestVersion, openReleasesPage } from '../data/update'
 import { isNewer } from '../lib/version'
@@ -150,13 +151,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const current = await getVersion()
         if (cancelled) return
         let update: AppState['update'] = null
+        let updateStatus: AppState['updateStatus'] = 'ok'
         try {
           const latest = await fetchLatestVersion()
           update = { latest, isNew: isNewer(latest, current) }
         } catch {
-          // offline / fetch failed — leave update null (no false "up to date")
+          // offline / fetch failed — mark the check failed so the UI says so
+          // instead of falsely reporting "up to date".
+          updateStatus = 'error'
         }
-        if (!cancelled) dispatch({ version: current, update })
+        if (!cancelled) dispatch({ version: current, update, updateStatus })
       } catch {
         // getVersion failed — ignore
       }
@@ -319,9 +323,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const res = await source.saveChanges(appId, changes)
       if (res.saved < n) {
         // Steam committed fewer changes than we sent (e.g. one was rejected). Re-read
-        // ground truth so the UI never shows a rejected edit as saved.
+        // ground truth so the UI never shows a rejected edit as saved — but keep any
+        // edit the user made while the write/reload was in flight (it stays pending).
         const fresh = await source.loadGame(appId)
-        dispatch((cur) => applyLoadedGame(cur, appId, fresh))
+        // `aw`/`sw` are the working maps captured at save start (immutable), so
+        // applyPartialSave can tell a genuine in-flight edit from an untouched key.
+        dispatch((cur) => applyPartialSave(cur, appId, fresh, { ach: aw, stat: sw }))
         showToast(tRef.current('toast.savedPartial', { saved: res.saved, total: n }))
       } else {
         dispatch((cur) => ({

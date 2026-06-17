@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useApp } from '../state/AppContext'
 import { LANGS, type I18nKey, type Lang } from '../i18n'
 import type { Theme } from '../types'
+import { updateView } from '../lib/version'
 import Seg from './ui/Seg'
 
 const THEME_OPTS: [Theme, string, I18nKey][] = [
@@ -81,20 +82,30 @@ export default function Settings() {
           title={t('settings.about')}
           desc={t('settings.version', { version: state.version ?? '—' })}
         >
-          {state.update?.isNew ? (
-            <button
-              onClick={openReleases}
-              style={{
-                padding: '7px 15px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
-                background: 'var(--s0)', color: 'var(--t1)', fontSize: '13px', fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {t('update.available', { version: state.update.latest })} · {t('update.download')}
-            </button>
-          ) : state.version ? (
-            <span style={{ fontSize: '13px', color: 'var(--t3)' }}>{t('update.upToDate')}</span>
-          ) : null}
+          {(() => {
+            const view = updateView(state.updateStatus, state.update)
+            if (view === 'available') {
+              return (
+                <button
+                  onClick={openReleases}
+                  style={{
+                    padding: '7px 15px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
+                    background: 'var(--s0)', color: 'var(--t1)', fontSize: '13px', fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {t('update.available', { version: state.update?.latest ?? '' })} · {t('update.download')}
+                </button>
+              )
+            }
+            if (view === 'current') {
+              return <span style={{ fontSize: '13px', color: 'var(--t3)' }}>{t('update.upToDate')}</span>
+            }
+            if (view === 'error') {
+              return <span style={{ fontSize: '13px', color: 'var(--t3)' }}>{t('update.checkFailed')}</span>
+            }
+            return null
+          })()}
         </SettingRow>
 
         <p style={{ fontSize: '11.5px', color: 'var(--t3)', margin: '6px 2px 0', lineHeight: 1.6 }}>

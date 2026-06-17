@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isNewer } from '../version'
+import { isNewer, updateView } from '../version'
 
 describe('isNewer', () => {
   it('detects a newer patch / minor / major', () => {
@@ -20,5 +20,21 @@ describe('isNewer', () => {
   })
   it('never reports an update for a malformed latest', () => {
     expect(isNewer('garbage', '1.0.0')).toBe(false)
+  })
+})
+
+describe('updateView', () => {
+  it('reports a failed check as error, never as current', () => {
+    // The regression: a network/GitHub failure must not be shown as "up to date".
+    expect(updateView('error', null)).toBe('error')
+  })
+  it('reports up to date only after a successful check found nothing newer', () => {
+    expect(updateView('ok', { isNew: false })).toBe('current')
+  })
+  it('reports an available update when the check found a newer version', () => {
+    expect(updateView('ok', { isNew: true })).toBe('available')
+  })
+  it('shows nothing while the check has not resolved', () => {
+    expect(updateView('idle', null)).toBe('none')
   })
 })

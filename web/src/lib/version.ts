@@ -17,3 +17,20 @@ export function isNewer(latest: string, current: string): boolean {
   }
   return false
 }
+
+/** Lifecycle of the in-app update check. */
+export type UpdateStatus = 'idle' | 'ok' | 'error'
+
+/** What the update indicator should display. */
+export type UpdateView = 'available' | 'current' | 'error' | 'none'
+
+/** Decide what the update indicator should show. A known current version with a
+ *  *failed* check is reported as `error`, never `current`, so a network/GitHub
+ *  outage is never shown to the user as "up to date". `current` is reported only
+ *  after a successful check whose comparison found nothing newer. */
+export function updateView(status: UpdateStatus, update: { isNew: boolean } | null): UpdateView {
+  if (update?.isNew) return 'available'
+  if (status === 'error') return 'error'
+  if (status === 'ok' && update) return 'current'
+  return 'none'
+}

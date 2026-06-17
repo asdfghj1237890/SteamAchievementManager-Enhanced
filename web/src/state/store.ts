@@ -4,6 +4,7 @@ import type {
 import { DEFAULT_ACCENT } from '../lib/theme'
 import { detectLang, type Lang } from '../i18n'
 import { loadSettings } from '../data/cache'
+import type { UpdateStatus } from '../lib/version'
 
 export type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -55,6 +56,8 @@ export interface AppState {
   // in-app update check (Tauri only)
   version: string | null
   update: { latest: string; isNew: boolean } | null
+  /** Lifecycle of the version check, so a failed fetch is never shown as current. */
+  updateStatus: UpdateStatus
   updateDismissed: string | null
 }
 
@@ -111,6 +114,7 @@ export function makeInitialState(): AppState {
 
     version: null,
     update: null,
+    updateStatus: 'idle',
     updateDismissed: saved.dismissedVersion ?? null,
   }
 }
