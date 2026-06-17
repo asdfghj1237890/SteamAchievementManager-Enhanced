@@ -21,7 +21,7 @@ async fn list_games(app_ids: Vec<u32>) -> Result<Vec<OwnedGame>, String> {
 }
 
 // ---------- per-game read/write via a self-spawned worker process ----------
-fn run_self_worker(args: &[&str]) -> Result<String, String> {
+fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(exe);
     cmd.arg("--steam-worker");
@@ -31,7 +31,23 @@ fn run_self_worker(args: &[&str]) -> Result<String, String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — no console flash
     }
-    let out = cmd.output().map_err(|e| format!("無法啟動 worker：{e}"))?;
+    // Large payloads (e.g. a bulk write) go over stdin, not argv, to stay clear of the
+    // OS command-line length limit (~32 KB on Windows) for games with many achievements.
+    cmd.stdin(if stdin_data.is_some() {
+        std::process::Stdio::piped()
+    } else {
+        std::process::Stdio::null()
+    });
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("無法啟動 worker：{e}"))?;
+    if let Some(data) = stdin_data {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().ok_or("worker stdin 無法取得")?;
+        stdin.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        // stdin dropped here → closes the pipe so the worker's read sees EOF
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -43,7 +59,7 @@ fn run_self_worker(args: &[&str]) -> Result<String, String> {
 #[tauri::command]
 async fn load_game(app_id: String) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
-        let json = run_self_worker(&["read", app_id.as_str()])?;
+        let json = run_self_worker(&["read", app_id.as_str()], None)?;
         serde_json::from_str(&json).map_err(|e| format!("解析 worker 輸出失敗：{e}"))
     })
     .await
@@ -80,7 +96,7 @@ async fn save_changes(app_id: String, changes: GameChanges) -> Result<serde_json
         .collect();
     tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let payload = serde_json::json!({ "achievements": ach, "stats": stats }).to_string();
-        let json = run_self_worker(&["write", app_id.as_str(), payload.as_str()])?;
+        let json = run_self_worker(&["write", app_id.as_str()], Some(payload.as_str()))?;
         serde_json::from_str(&json).map_err(|e| format!("解析失敗：{e}"))
     })
     .await
@@ -230,8 +246,14 @@ fn run_worker(args: &[String]) -> Result<String, String> {
             serde_json::to_string(&game).map_err(|e| e.to_string())
         }
         "write" => {
-            let payload = args.get(2).map(String::as_str).unwrap_or("{}");
-            let w: WritePayload = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            // The write payload arrives over stdin (not argv) so bulk saves can't hit
+            // the OS command-line length limit. See run_self_worker.
+            use std::io::Read;
+            let mut payload = String::new();
+            std::io::stdin()
+                .read_to_string(&mut payload)
+                .map_err(|e| e.to_string())?;
+            let w: WritePayload = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
             let saved = steam_core::write_game(app_id, &w.achievements, &w.stats)?;
             Ok(format!("{{\"saved\":{saved}}}"))
         }
