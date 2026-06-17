@@ -35,7 +35,7 @@ function SettingRow({
 }
 
 export default function Settings() {
-  const { state, t, set } = useApp()
+  const { state, t, set, openReleases } = useApp()
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '26px 28px', minHeight: 0 }}>
@@ -75,6 +75,26 @@ export default function Settings() {
               </option>
             ))}
           </select>
+        </SettingRow>
+
+        <SettingRow
+          title={t('settings.about')}
+          desc={t('settings.version', { version: state.version ?? '—' })}
+        >
+          {state.update?.isNew ? (
+            <button
+              onClick={openReleases}
+              style={{
+                padding: '7px 15px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
+                background: 'var(--s0)', color: 'var(--t1)', fontSize: '13px', fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {t('update.available', { version: state.update.latest })} · {t('update.download')}
+            </button>
+          ) : state.version ? (
+            <span style={{ fontSize: '13px', color: 'var(--t3)' }}>{t('update.upToDate')}</span>
+          ) : null}
         </SettingRow>
 
         <p style={{ fontSize: '11.5px', color: 'var(--t3)', margin: '6px 2px 0', lineHeight: 1.6 }}>

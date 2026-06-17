@@ -5,6 +5,7 @@ import TitleBar from './TitleBar'
 import Sidebar from './Sidebar'
 import Resizer from './Resizer'
 import Toast from './Toast'
+import UpdateBanner from './UpdateBanner'
 
 // The app *is* the window (the design's outer canvas framing is not part of it):
 // custom title bar + sidebar + main, filling the whole OS/browser viewport.
@@ -24,6 +25,7 @@ export default function AppLayout() {
   return (
     <div style={root}>
       <TitleBar />
+      <UpdateBanner />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Sidebar />
         <Resizer />
