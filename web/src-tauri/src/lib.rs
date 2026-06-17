@@ -145,6 +145,63 @@ async fn game_header(app_id: String) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+// ---------- in-app update check (read-only) ----------
+const LATEST_JSON_URL: &str =
+    "https://raw.githubusercontent.com/asdfghj1237890/SteamAchievementManager-Enhanced/master/latest.json";
+
+/// Fetch the latest published version string from the hosted latest.json.
+#[tauri::command]
+async fn latest_version() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<String, String> {
+        let body = ureq::get(LATEST_JSON_URL)
+            .timeout(std::time::Duration::from_secs(10))
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_string()
+            .map_err(|e| e.to_string())?;
+        let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        v.get("version")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| "latest.json missing 'version'".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Open an https URL in the user's default browser.
+#[tauri::command]
+async fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("refusing to open non-https URL".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg(&url)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "", &url])
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = url;
+            Err("unsupported platform".into())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---------- worker entrypoint (called from main when `--steam-worker`) ----------
 pub fn worker_main(args: &[String]) {
     match run_worker(args) {
@@ -202,7 +259,9 @@ pub fn run() {
             save_changes,
             game_progress,
             game_categories,
-            game_header
+            game_header,
+            latest_version,
+            open_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
