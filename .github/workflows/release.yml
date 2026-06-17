@@ -20,7 +20,27 @@ permissions:
   contents: write # required to create the GitHub Release
 
 jobs:
+  # Fail fast if the git tag and the app's own version (what getVersion() reports)
+  # disagree — otherwise a release built without bumping the version files would
+  # immediately nag users to "update" to the version they just installed.
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match the app version
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          want="${tag#v}"
+          conf=$(jq -r '.version' web/src-tauri/tauri.conf.json)
+          pkg=$(jq -r '.version' web/package.json)
+          if [ "$want" != "$conf" ] || [ "$want" != "$pkg" ]; then
+            echo "::error::tag $tag (=$want) != versions (tauri.conf.json=$conf, package.json=$pkg). Bump both to $want before tagging."
+            exit 1
+          fi
+          echo "version OK: $want"
+
   build-windows:
+    needs: [verify-version]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +70,7 @@ jobs:
           if-no-files-found: error
 
   build-macos:
+    needs: [verify-version]
     runs-on: macos-latest # Apple Silicon (arm64)
     steps:
       - uses: actions/checkout@v4
@@ -120,21 +141,34 @@ jobs:
   bump-latest-json:
     needs: [release]
     runs-on: ubuntu-latest
+    # Serialize latest.json updates so concurrent/overlapping release runs can't
+    # race each other when pushing the pointer.
+    concurrency:
+      group: latest-json
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
           ref: master
-      - name: Write latest.json from the release tag and push
+      - name: Write latest.json from the release tag and push (monotonic)
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
-          version="${tag#v}"
-          printf '{ "version": "%s" }\n' "$version" > latest.json
+          new="${tag#v}"
+          cur=$(jq -r '.version // "0.0.0"' latest.json 2>/dev/null || echo "0.0.0")
+          # Refuse to downgrade: only write when new >= cur, so re-running an older
+          # tag's release can't push an older version over a newer one.
+          highest=$(printf '%s\n%s\n' "$new" "$cur" | sort -V | tail -1)
+          if [ "$new" != "$cur" ] && [ "$highest" != "$new" ]; then
+            echo "latest.json is at $cur; refusing to write older $new."
+            exit 0
+          fi
+          printf '{ "version": "%s" }\n' "$new" > latest.json
           if git diff --quiet -- latest.json; then
-            echo "latest.json already at $version — nothing to do."
+            echo "latest.json already at $new — nothing to do."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add latest.json
-          git commit -m "ci: bump latest.json to $version"
+          git commit -m "ci: bump latest.json to $new"
           git push origin HEAD:master
