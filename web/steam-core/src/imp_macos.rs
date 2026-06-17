@@ -168,6 +168,41 @@ pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
     Some((earned.min(total), total))
 }
 
+/// The user's library categories per app, parsed from the modern Steam Collections
+/// cloud store (`config/cloudstorage/cloud-storage-namespace-1.json`). Read-only, no
+/// Steam connection. Legacy `sharedconfig.vdf` tags are not read on macOS yet.
+pub fn read_categories() -> Vec<(u32, Vec<String>)> {
+    let Some(root) = steam_root() else { return Vec::new() };
+    let Some(account) = find_account_id(&root) else { return Vec::new() };
+    let path =
+        format!("{root}/userdata/{account}/config/cloudstorage/cloud-storage-namespace-1.json");
+    let Ok(txt) = std::fs::read_to_string(&path) else { return Vec::new() };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) else { return Vec::new() };
+    let mut map: std::collections::HashMap<u32, std::collections::BTreeSet<String>> =
+        std::collections::HashMap::new();
+    for pair in json.as_array().into_iter().flatten() {
+        let Some(p) = pair.as_array() else { continue };
+        let Some(key) = p.first().and_then(|k| k.as_str()) else { continue };
+        if !key.starts_with("user-collections.") {
+            continue;
+        }
+        let Some(vs) = p.get(1).and_then(|e| e.get("value")).and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Ok(coll) = serde_json::from_str::<serde_json::Value>(vs) else { continue };
+        let Some(name) = coll.get("name").and_then(|n| n.as_str()) else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        for app in coll.get("added").and_then(|a| a.as_array()).into_iter().flatten() {
+            if let Some(id) = app.as_u64() {
+                map.entry(id as u32).or_default().insert(name.to_string());
+            }
+        }
+    }
+    map.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect()
+}
+
 pub struct SteamClient {
     #[allow(dead_code)] // kept alive for the process lifetime; dlclose intentionally skipped
     module: *mut c_void,

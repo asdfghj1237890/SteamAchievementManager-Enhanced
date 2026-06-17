@@ -1176,8 +1176,9 @@ pub use imp::completion_local;
 #[cfg(windows)]
 pub use imp::read_categories;
 
-/// Library categories are read from the Windows sharedconfig.vdf path; stubbed elsewhere.
-#[cfg(not(windows))]
+/// Library categories: Windows + macOS read them from the local Steam config;
+/// stubbed on any other platform so the crate still type-checks.
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn read_categories() -> Vec<(u32, Vec<String>)> {
     Vec::new()
 }
@@ -1186,7 +1187,7 @@ pub fn read_categories() -> Vec<(u32, Vec<String>)> {
 mod imp_macos;
 
 #[cfg(target_os = "macos")]
-pub use imp_macos::{completion_local, SteamClient};
+pub use imp_macos::{completion_local, read_categories, SteamClient};
 
 #[cfg(target_os = "macos")]
 pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
