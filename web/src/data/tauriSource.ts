@@ -21,6 +21,7 @@ interface RawAchievement {
   rarity: number
   icon: string
   icon_gray: string
+  protected: boolean
 }
 
 interface RawStat {
@@ -71,7 +72,7 @@ export class TauriSource implements SamSource {
       rarity: Math.round(a.rarity),
       unlocked: a.unlocked,
       hidden: a.hidden,
-      protected: false,
+      protected: a.protected,
       points: 0,
       icon: a.icon,
       iconGray: a.icon_gray,

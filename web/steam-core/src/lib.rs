@@ -92,6 +92,8 @@ pub struct AchievementInfo {
     pub icon: String,
     /// Icon file name (locked/gray).
     pub icon_gray: String,
+    /// Schema permission bits set (Steam/Valve-controlled) → UI blocks toggling.
+    pub protected: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -875,6 +877,7 @@ mod imp {
                 let key_icon_gray = CString::new("icon_gray").unwrap();
 
                 let count = num(stats);
+                let ach_perms = self.read_ach_perms(app_id);
                 let mut achievements = Vec::with_capacity(count as usize);
                 for i in 0..count {
                     let id_ptr = get_name(stats, i);
@@ -902,9 +905,11 @@ mod imp {
                         get_pct(stats, idc.as_ptr(), &mut rarity);
                     }
 
+                    let protected = (ach_perms.get(&id).copied().unwrap_or(0) & 3) != 0;
                     achievements.push(AchievementInfo {
                         name: if name.is_empty() { id.clone() } else { name },
                         id,
+                        protected,
                         desc,
                         hidden,
                         unlocked: achieved != 0,
@@ -1054,6 +1059,27 @@ mod imp {
                 let f: extern "C" fn(*mut c_void) -> *const c_char = vfn(self.apps008, 4);
                 cstr(f(self.apps008))
             }
+        }
+
+        /// Map achievement API name -> schema `permission` bits (for protected detection).
+        fn read_ach_perms(&self, app_id: u32) -> std::collections::HashMap<String, i32> {
+            let mut out = std::collections::HashMap::new();
+            let path = format!(r"{}\appcache\stats\UserGameStatsSchema_{}.bin", self.install, app_id);
+            let Ok(data) = std::fs::read(&path) else { return out };
+            let Some(root) = super::parse_kv(&data) else { return out };
+            let Some(stats) = root.child(&app_id.to_string()).and_then(|a| a.child("stats")) else {
+                return out;
+            };
+            for group in &stats.children {
+                let Some(bits) = group.child("bits") else { continue };
+                for bit in &bits.children {
+                    if let Some(id) = bit.child("name").and_then(|n| n.as_str()) {
+                        let perm = bit.child("permission").map(|p| p.as_int()).unwrap_or(0);
+                        out.insert(id.to_string(), perm);
+                    }
+                }
+            }
+            out
         }
 
         /// Parse the local schema .bin for this game's int/float stat definitions.
