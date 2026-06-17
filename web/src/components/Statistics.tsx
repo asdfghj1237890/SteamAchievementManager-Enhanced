@@ -3,7 +3,7 @@ import { useApp } from '../state/AppContext'
 import { segBase } from '../lib/styles'
 
 export default function Statistics() {
-  const { state, t, activeGame: g, set, setStat, resetStats } = useApp()
+  const { state, t, activeGame: g, set, setStat, resetStats, showToast } = useApp()
   if (!g) return null
 
   const sw = state.statState[g.id] ?? {}
@@ -67,7 +67,19 @@ export default function Statistics() {
                 <span style={{ fontSize: '13.5px', fontWeight: 500, color: 'var(--t1)' }}>{s.name}</span>
                 <span>
                   {editable ? (
-                    <input value={String(cur)} onChange={(e) => setStat(g.id, s.id, e.target.value)} style={inputStyle} />
+                    <input
+                      value={String(cur)}
+                      onChange={(e) => setStat(g.id, s.id, e.target.value)}
+                      onBlur={() => {
+                        // increment-only stats can only go up — revert an illegal decrease.
+                        const floor = so[s.id] ?? 0
+                        if (s.extra === 'increment_only' && Number(cur) < floor) {
+                          setStat(g.id, s.id, String(floor))
+                          showToast(t('toast.incrementOnly'))
+                        }
+                      }}
+                      style={inputStyle}
+                    />
                   ) : (
                     <span style={valStyle}>{Number(cur).toLocaleString()}</span>
                   )}

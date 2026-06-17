@@ -24,6 +24,8 @@ export const LANGS = [
 export type Lang = (typeof LANGS)[number]['code']
 
 const zhTW = {
+  'toast.incrementOnly': '只增統計無法調低，已還原',
+  'toast.savedPartial': '已寫入 {saved}/{total} 項；其餘被 Steam 拒絕，已重新整理',
   'settings.about': '關於',
   'settings.version': '版本 {version}',
   'update.available': '有新版本 {version}',
@@ -133,6 +135,8 @@ export type I18nKey = keyof typeof zhTW
 type Dict = Record<I18nKey, string>
 
 const zhCN: Dict = {
+  'toast.incrementOnly': '只增统计无法调低，已还原',
+  'toast.savedPartial': '已写入 {saved}/{total} 项；其余被 Steam 拒绝，已重新整理',
   'settings.about': '关于',
   'settings.version': '版本 {version}',
   'update.available': '有新版本 {version}',
@@ -239,6 +243,8 @@ const zhCN: Dict = {
 }
 
 const enUS: Dict = {
+  'toast.incrementOnly': "Increment-only stat can't be lowered — reverted",
+  'toast.savedPartial': 'Saved {saved}/{total}; Steam rejected the rest — refreshed',
   'settings.about': 'About',
   'settings.version': 'Version {version}',
   'update.available': 'New version {version} available',
@@ -345,6 +351,8 @@ const enUS: Dict = {
 }
 
 const es: Dict = {
+  'toast.incrementOnly': 'Una estadística incremental no puede reducirse — revertida',
+  'toast.savedPartial': 'Guardado {saved}/{total}; Steam rechazó el resto — actualizado',
   'settings.about': 'Acerca de',
   'settings.version': 'Versión {version}',
   'update.available': 'Nueva versión {version} disponible',
@@ -451,6 +459,8 @@ const es: Dict = {
 }
 
 const pt: Dict = {
+  'toast.incrementOnly': 'Estatística incremental não pode ser reduzida — revertida',
+  'toast.savedPartial': 'Salvo {saved}/{total}; o Steam rejeitou o resto — atualizado',
   'settings.about': 'Sobre',
   'settings.version': 'Versão {version}',
   'update.available': 'Nova versão {version} disponível',
@@ -557,6 +567,8 @@ const pt: Dict = {
 }
 
 const fr: Dict = {
+  'toast.incrementOnly': "Une statistique à incrément seul ne peut pas être réduite — annulé",
+  'toast.savedPartial': 'Enregistré {saved}/{total} ; Steam a rejeté le reste — actualisé',
   'settings.about': 'À propos',
   'settings.version': 'Version {version}',
   'update.available': 'Nouvelle version {version} disponible',
@@ -663,6 +675,8 @@ const fr: Dict = {
 }
 
 const de: Dict = {
+  'toast.incrementOnly': 'Inkrementelle Statistik kann nicht verringert werden — zurückgesetzt',
+  'toast.savedPartial': '{saved}/{total} gespeichert; Steam hat den Rest abgelehnt — aktualisiert',
   'settings.about': 'Über',
   'settings.version': 'Version {version}',
   'update.available': 'Neue Version {version} verfügbar',
@@ -769,6 +783,8 @@ const de: Dict = {
 }
 
 const it: Dict = {
+  'toast.incrementOnly': 'Una statistica solo-incremento non può essere ridotta — ripristinata',
+  'toast.savedPartial': 'Salvati {saved}/{total}; Steam ha rifiutato il resto — aggiornato',
   'settings.about': 'Informazioni',
   'settings.version': 'Versione {version}',
   'update.available': 'Nuova versione {version} disponibile',
@@ -875,6 +891,8 @@ const it: Dict = {
 }
 
 const ja: Dict = {
+  'toast.incrementOnly': 'インクリメント専用の統計は減らせません — 元に戻しました',
+  'toast.savedPartial': '{saved}/{total} 件を保存。残りは Steam に拒否されました — 更新しました',
   'settings.about': 'このアプリについて',
   'settings.version': 'バージョン {version}',
   'update.available': '新しいバージョン {version} が利用可能',
@@ -981,6 +999,8 @@ const ja: Dict = {
 }
 
 const ko: Dict = {
+  'toast.incrementOnly': '증가 전용 통계는 낮출 수 없습니다 — 되돌림',
+  'toast.savedPartial': '{saved}/{total} 저장됨; 나머지는 Steam이 거부함 — 새로고침함',
   'settings.about': '정보',
   'settings.version': '버전 {version}',
   'update.available': '새 버전 {version} 사용 가능',

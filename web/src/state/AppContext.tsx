@@ -317,16 +317,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })
     try {
       const res = await source.saveChanges(appId, changes)
-      dispatch((cur) => ({
-        origAch: { ...cur.origAch, [appId]: { ...cur.achState[appId] } },
-        origStat: { ...cur.origStat, [appId]: { ...cur.statState[appId] } },
-        games: cur.games.map((g) =>
-          g.appId === appId || g.id === appId
-            ? { ...g, completion: completionFlat(game.achievements, cur.achState[appId] ?? {}) }
-            : g,
-        ),
-      }))
-      showToast(tRef.current('toast.saved', { n: res.saved }))
+      if (res.saved < n) {
+        // Steam committed fewer changes than we sent (e.g. one was rejected). Re-read
+        // ground truth so the UI never shows a rejected edit as saved.
+        const fresh = await source.loadGame(appId)
+        dispatch((cur) => applyLoadedGame(cur, appId, fresh))
+        showToast(tRef.current('toast.savedPartial', { saved: res.saved, total: n }))
+      } else {
+        dispatch((cur) => ({
+          origAch: { ...cur.origAch, [appId]: { ...cur.achState[appId] } },
+          origStat: { ...cur.origStat, [appId]: { ...cur.statState[appId] } },
+          games: cur.games.map((g) =>
+            g.appId === appId || g.id === appId
+              ? { ...g, completion: completionFlat(game.achievements, cur.achState[appId] ?? {}) }
+              : g,
+          ),
+        }))
+        showToast(tRef.current('toast.saved', { n: res.saved }))
+      }
     } catch (e) {
       showToast(tRef.current('toast.saveFailed', { msg: errMsg(e) }))
     }
