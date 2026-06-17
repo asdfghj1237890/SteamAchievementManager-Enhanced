@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "sam-web",
+  "productName": "SteamAchievementManager-Enhanced",
   "version": "1.0.0",
   "identifier": "io.github.asdfghj1237890.samenhanced",
   "build": {
