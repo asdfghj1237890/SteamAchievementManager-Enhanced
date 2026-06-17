@@ -325,8 +325,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         showToast(tRef.current('toast.savedPartial', { saved: res.saved, total: n }))
       } else {
         dispatch((cur) => ({
-          origAch: { ...cur.origAch, [appId]: { ...cur.achState[appId] } },
-          origStat: { ...cur.origStat, [appId]: { ...cur.statState[appId] } },
+          // Advance the saved baseline only for the values we actually sent, so an edit
+          // made while the async write was in flight stays pending (not falsely "saved").
+          origAch: { ...cur.origAch, [appId]: { ...(cur.origAch[appId] ?? {}), ...changes.achievements } },
+          origStat: { ...cur.origStat, [appId]: { ...(cur.origStat[appId] ?? {}), ...changes.stats } },
           games: cur.games.map((g) =>
             g.appId === appId || g.id === appId
               ? { ...g, completion: completionFlat(game.achievements, cur.achState[appId] ?? {}) }
