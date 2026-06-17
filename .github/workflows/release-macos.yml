@@ -45,8 +45,8 @@ jobs:
         run: npm ci
 
       # Compiles the frontend (beforeBuildCommand) and the Rust shell in release
-      # mode, then bundles SteamAchievementManager-Enhanced.app into a .dmg. Host
-      # target on macos-latest is
+      # mode, then bundles "SAM Enhanced.app" into a .dmg. Host target on
+      # macos-latest is
       # aarch64-apple-darwin, so this is an Apple Silicon build.
       - name: Build .dmg (release, Apple Silicon)
         working-directory: web
@@ -69,7 +69,7 @@ jobs:
         run: |
           tag="${{ steps.stage.outputs.tag }}"
           asset="${{ steps.stage.outputs.asset }}"
-          notes=$'macOS (Apple Silicon) build — a `.dmg`.\n\n**How to install:** download the `.dmg` below, open it, and drag `SteamAchievementManager-Enhanced` into Applications.\n\nThis build is **unsigned**, so on first launch macOS Gatekeeper will block it. To open it:\n- Right-click the app -> Open -> Open, **or**\n- run `xattr -cr /Applications/SteamAchievementManager-Enhanced.app` once.\n\nRequires:\n- macOS on Apple Silicon (M-series)\n- Steam installed, running, and logged in\n\n⚠️ This writes to your real Steam account when you unlock achievements or edit stats.'
+          notes=$'macOS (Apple Silicon) build — a `.dmg`.\n\n**How to install:** download the `.dmg` below, open it, and drag `SAM Enhanced` into Applications.\n\nThis build is **unsigned**, so on first launch macOS Gatekeeper will block it. To open it:\n- Right-click the app -> Open -> Open, **or**\n- run `xattr -cr "/Applications/SAM Enhanced.app"` once.\n\nRequires:\n- macOS on Apple Silicon (M-series)\n- Steam installed, running, and logged in\n\n⚠️ This writes to your real Steam account when you unlock achievements or edit stats.'
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag exists — uploading asset."
             gh release upload "$tag" "$asset" --clobber
