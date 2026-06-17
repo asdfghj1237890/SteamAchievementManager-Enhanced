@@ -51,6 +51,11 @@ export interface AppState {
 
   toast: string | null
   toastSeq: number
+
+  // in-app update check (Tauri only)
+  version: string | null
+  update: { latest: string; isNew: boolean } | null
+  updateDismissed: string | null
 }
 
 /** setState-style action: a partial patch or an updater that derives one from current state. */
@@ -103,5 +108,9 @@ export function makeInitialState(): AppState {
 
     toast: null,
     toastSeq: 0,
+
+    version: null,
+    update: null,
+    updateDismissed: saved.dismissedVersion ?? null,
   }
 }

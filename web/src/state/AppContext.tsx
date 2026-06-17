@@ -9,6 +9,9 @@ import { translate, type Translate } from '../i18n'
 import type { GameChanges } from '../data/source'
 import { reducer, makeInitialState, type Action, type AppState } from './store'
 import { applyLoadedGame } from './applyLoadedGame'
+import { getVersion } from '@tauri-apps/api/app'
+import { fetchLatestVersion, openUrl, RELEASES_URL } from '../data/update'
+import { isNewer } from '../lib/version'
 import { rootCssVars, styleTokens, themeTokens } from '../lib/theme'
 import {
   bulkApply, completionFlat, filteredAch, pendingCount, type BulkMode,
@@ -40,6 +43,8 @@ interface AppContextValue {
   resetStats: () => void
   showToast: (msg: string) => void
   completionFor: (appId: string) => GameCompletion | undefined
+  dismissUpdate: () => void
+  openReleases: () => void
 }
 
 const Ctx = createContext<AppContextValue | null>(null)
@@ -132,8 +137,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
       theme: state.theme,
       sidebarWidth: state.sidebarWidth,
       lang: state.lang,
+      dismissedVersion: state.updateDismissed ?? undefined,
     })
-  }, [state.theme, state.sidebarWidth, state.lang])
+  }, [state.theme, state.sidebarWidth, state.lang, state.updateDismissed])
+
+  // ---- check for a newer published version (real app only) ----
+  useEffect(() => {
+    if (!isTauri()) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const current = await getVersion()
+        if (cancelled) return
+        let update: AppState['update'] = null
+        try {
+          const latest = await fetchLatestVersion()
+          update = { latest, isNew: isNewer(latest, current) }
+        } catch {
+          // offline / fetch failed — leave update null (no false "up to date")
+        }
+        if (!cancelled) dispatch({ version: current, update })
+      } catch {
+        // getVersion failed — ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // ---- background-load every game's completion (real source only) ----
   useEffect(() => {
@@ -309,6 +340,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return s.games.find((g) => g.appId === appId || g.id === appId)?.completion
   }, [])
 
+  const dismissUpdate = useCallback(() => {
+    dispatch((s) => (s.update ? { updateDismissed: s.update.latest } : {}))
+  }, [])
+
+  const openReleases = useCallback(() => {
+    void openUrl(RELEASES_URL)
+  }, [])
+
   const T = useMemo(() => themeTokens(state.theme), [state.theme])
   const ST = useMemo(() => styleTokens(), [])
   const rootVars = useMemo(() => rootCssVars(T, ST, state.accent), [T, ST, state.accent])
@@ -318,6 +357,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state, t, T, ST, rootVars, games: state.games, activeGame,
     set, selectGame, openLibrary, openSettings, refresh, gotoTab, openGame,
     toggleAch, bulk, store, setStat, resetStats, showToast, completionFor,
+    dismissUpdate, openReleases,
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

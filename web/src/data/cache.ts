@@ -9,6 +9,7 @@ export interface PersistedSettings {
   theme?: Theme
   sidebarWidth?: number
   lang?: Lang
+  dismissedVersion?: string
 }
 const SETTINGS_KEY = 'sam-settings-v1'
 
