@@ -24,6 +24,11 @@ export const LANGS = [
 export type Lang = (typeof LANGS)[number]['code']
 
 const zhTW = {
+  'settings.about': '關於',
+  'settings.version': '版本 {version}',
+  'update.available': '有新版本 {version}',
+  'update.upToDate': '已是最新版本',
+  'update.download': '下載',
   'app.name': '成就管理器',
   'nav.library': '遊戲庫',
   'nav.settings': '設定',
@@ -128,6 +133,11 @@ export type I18nKey = keyof typeof zhTW
 type Dict = Record<I18nKey, string>
 
 const zhCN: Dict = {
+  'settings.about': '关于',
+  'settings.version': '版本 {version}',
+  'update.available': '有新版本 {version}',
+  'update.upToDate': '已是最新版本',
+  'update.download': '下载',
   'app.name': '成就管理器',
   'nav.library': '游戏库',
   'nav.settings': '设置',
@@ -229,6 +239,11 @@ const zhCN: Dict = {
 }
 
 const enUS: Dict = {
+  'settings.about': 'About',
+  'settings.version': 'Version {version}',
+  'update.available': 'New version {version} available',
+  'update.upToDate': 'Up to date',
+  'update.download': 'Download',
   'app.name': 'Achievement Manager',
   'nav.library': 'Library',
   'nav.settings': 'Settings',
@@ -330,6 +345,11 @@ const enUS: Dict = {
 }
 
 const es: Dict = {
+  'settings.about': 'Acerca de',
+  'settings.version': 'Versión {version}',
+  'update.available': 'Nueva versión {version} disponible',
+  'update.upToDate': 'Actualizado',
+  'update.download': 'Descargar',
   'app.name': 'Gestor de logros',
   'nav.library': 'Biblioteca',
   'nav.settings': 'Ajustes',
@@ -431,6 +451,11 @@ const es: Dict = {
 }
 
 const pt: Dict = {
+  'settings.about': 'Sobre',
+  'settings.version': 'Versão {version}',
+  'update.available': 'Nova versão {version} disponível',
+  'update.upToDate': 'Atualizado',
+  'update.download': 'Baixar',
   'app.name': 'Gerenciador de conquistas',
   'nav.library': 'Biblioteca',
   'nav.settings': 'Configurações',
@@ -532,6 +557,11 @@ const pt: Dict = {
 }
 
 const fr: Dict = {
+  'settings.about': 'À propos',
+  'settings.version': 'Version {version}',
+  'update.available': 'Nouvelle version {version} disponible',
+  'update.upToDate': 'À jour',
+  'update.download': 'Télécharger',
   'app.name': 'Gestionnaire de succès',
   'nav.library': 'Bibliothèque',
   'nav.settings': 'Paramètres',
@@ -633,6 +663,11 @@ const fr: Dict = {
 }
 
 const de: Dict = {
+  'settings.about': 'Über',
+  'settings.version': 'Version {version}',
+  'update.available': 'Neue Version {version} verfügbar',
+  'update.upToDate': 'Aktuell',
+  'update.download': 'Herunterladen',
   'app.name': 'Erfolge-Manager',
   'nav.library': 'Bibliothek',
   'nav.settings': 'Einstellungen',
@@ -734,6 +769,11 @@ const de: Dict = {
 }
 
 const it: Dict = {
+  'settings.about': 'Informazioni',
+  'settings.version': 'Versione {version}',
+  'update.available': 'Nuova versione {version} disponibile',
+  'update.upToDate': 'Aggiornato',
+  'update.download': 'Scarica',
   'app.name': 'Gestore obiettivi',
   'nav.library': 'Libreria',
   'nav.settings': 'Impostazioni',
@@ -835,6 +875,11 @@ const it: Dict = {
 }
 
 const ja: Dict = {
+  'settings.about': 'このアプリについて',
+  'settings.version': 'バージョン {version}',
+  'update.available': '新しいバージョン {version} が利用可能',
+  'update.upToDate': '最新です',
+  'update.download': 'ダウンロード',
   'app.name': '実績マネージャー',
   'nav.library': 'ライブラリ',
   'nav.settings': '設定',
@@ -936,6 +981,11 @@ const ja: Dict = {
 }
 
 const ko: Dict = {
+  'settings.about': '정보',
+  'settings.version': '버전 {version}',
+  'update.available': '새 버전 {version} 사용 가능',
+  'update.upToDate': '최신 버전입니다',
+  'update.download': '다운로드',
   'app.name': '도전 과제 관리자',
   'nav.library': '라이브러리',
   'nav.settings': '설정',
