@@ -130,12 +130,16 @@ jobs:
           win="${{ steps.stage.outputs.win }}"
           mac="${{ steps.stage.outputs.mac }}"
           notes=$'Cross-platform build.\n\n## Windows (portable)\nDownload the `.exe` and double-click it — no installation. Requires Windows 10/11 with the WebView2 runtime (preinstalled on current Windows).\n\n## macOS (Apple Silicon)\nDownload the `.dmg`, open it, and drag `SAM Enhanced` into Applications. This build is **unsigned**, so on first launch right-click the app -> Open -> Open, or run `xattr -cr "/Applications/SAM Enhanced.app"` once.\n\nBoth require Steam installed, running, and logged in.\n\n⚠️ This writes to your real Steam account when you unlock achievements or edit stats.'
-          if gh release view "$tag" >/dev/null 2>&1; then
+          # This job has no checkout, so gh has no local git remote to infer the
+          # repo from — pass it explicitly or `gh release` fails with
+          # "not a git repository".
+          repo="$GITHUB_REPOSITORY"
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
             echo "Release $tag exists — uploading assets."
-            gh release upload "$tag" "$win" "$mac" --clobber
+            gh release upload "$tag" "$win" "$mac" --repo "$repo" --clobber
           else
             echo "Creating release $tag."
-            gh release create "$tag" "$win" "$mac" --title "$tag" --notes "$notes"
+            gh release create "$tag" "$win" "$mac" --repo "$repo" --title "$tag" --notes "$notes"
           fi
 
   bump-latest-json:
