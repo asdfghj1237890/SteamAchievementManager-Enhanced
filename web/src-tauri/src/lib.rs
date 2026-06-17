@@ -169,32 +169,34 @@ async fn latest_version() -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Open an https URL in the user's default browser.
+/// GitHub Releases page (latest) — where update downloads live.
+const RELEASES_URL: &str =
+    "https://github.com/asdfghj1237890/SteamAchievementManager-Enhanced/releases/latest";
+
+/// Open the GitHub Releases page in the user's default browser. The URL is fixed
+/// here — there is no renderer-supplied input — so there is no shell-injection
+/// surface. The Windows path uses rundll32 (no `cmd.exe`, no metacharacter parsing).
 #[tauri::command]
-async fn open_url(url: String) -> Result<(), String> {
-    if !url.starts_with("https://") {
-        return Err("refusing to open non-https URL".into());
-    }
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+async fn open_releases() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<(), String> {
         #[cfg(target_os = "macos")]
         {
             std::process::Command::new("open")
-                .arg(&url)
+                .arg(RELEASES_URL)
                 .spawn()
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         }
         #[cfg(target_os = "windows")]
         {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", url.as_str()])
+            std::process::Command::new("rundll32")
+                .args(["url.dll,FileProtocolHandler", RELEASES_URL])
                 .spawn()
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            let _ = url;
             Err("unsupported platform".into())
         }
     })
@@ -261,7 +263,7 @@ pub fn run() {
             game_categories,
             game_header,
             latest_version,
-            open_url
+            open_releases
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

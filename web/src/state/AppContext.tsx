@@ -10,7 +10,7 @@ import type { GameChanges } from '../data/source'
 import { reducer, makeInitialState, type Action, type AppState } from './store'
 import { applyLoadedGame } from './applyLoadedGame'
 import { getVersion } from '@tauri-apps/api/app'
-import { fetchLatestVersion, openUrl, RELEASES_URL } from '../data/update'
+import { fetchLatestVersion, openReleasesPage } from '../data/update'
 import { isNewer } from '../lib/version'
 import { rootCssVars, styleTokens, themeTokens } from '../lib/theme'
 import {
@@ -345,7 +345,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const openReleases = useCallback(() => {
-    void openUrl(RELEASES_URL)
+    void openReleasesPage()
   }, [])
 
   const T = useMemo(() => themeTokens(state.theme), [state.theme])
