@@ -686,17 +686,34 @@ impl SteamClient {
             }
 
             if !stat_changes.is_empty() {
-                let floats: std::collections::HashSet<String> = self
-                    .read_stat_defs(app_id)
-                    .into_iter()
-                    .filter(|d| d.is_float)
-                    .map(|d| d.id)
-                    .collect();
+                let defs = self.read_stat_defs(app_id);
+                let floats: std::collections::HashSet<String> =
+                    defs.iter().filter(|d| d.is_float).map(|d| d.id.clone()).collect();
+                let inc_only: std::collections::HashSet<String> =
+                    defs.iter().filter(|d| d.increment_only).map(|d| d.id.clone()).collect();
+                let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 = vfn(stats, 1);
+                let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 0);
                 for sc in stat_changes {
                     let idc = match CString::new(sc.id.clone()) {
                         Ok(c) => c,
                         Err(_) => continue,
                     };
+                    // Never lower an increment-only stat: read the current value and skip
+                    // the write if this change would decrease it.
+                    if inc_only.contains(&sc.id) {
+                        let cur = if floats.contains(&sc.id) {
+                            let mut v: f32 = 0.0;
+                            get_float(stats, idc.as_ptr(), &mut v);
+                            v as f64
+                        } else {
+                            let mut v: i32 = 0;
+                            get_int(stats, idc.as_ptr(), &mut v);
+                            v as f64
+                        };
+                        if sc.value < cur {
+                            continue;
+                        }
+                    }
                     let ok = if floats.contains(&sc.id) {
                         set_float(stats, idc.as_ptr(), sc.value as f32)
                     } else {
