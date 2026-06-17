@@ -116,3 +116,25 @@ jobs:
             echo "Creating release $tag."
             gh release create "$tag" "$win" "$mac" --title "$tag" --notes "$notes"
           fi
+
+  bump-latest-json:
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: Write latest.json from the release tag and push
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          printf '{ "version": "%s" }\n' "$version" > latest.json
+          if git diff --quiet -- latest.json; then
+            echo "latest.json already at $version — nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add latest.json
+          git commit -m "ci: bump latest.json to $version"
+          git push origin HEAD:master
