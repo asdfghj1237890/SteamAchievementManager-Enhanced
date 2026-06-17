@@ -877,7 +877,10 @@ mod imp {
                 let key_icon_gray = CString::new("icon_gray").unwrap();
 
                 let count = num(stats);
-                let ach_perms = self.read_ach_perms(app_id);
+                // Reads stay lenient: a missing schema just means "no protection info",
+                // so display every achievement as unprotected (the write path is the one
+                // that must fail closed).
+                let ach_perms = self.read_ach_perms(app_id).unwrap_or_default();
                 let mut achievements = Vec::with_capacity(count as usize);
                 for i in 0..count {
                     let id_ptr = get_name(stats, i);
@@ -977,18 +980,36 @@ mod imp {
                 let set_float: extern "C" fn(*mut c_void, *const c_char, f32) -> u8 = vfn(stats, 2);
 
                 let mut applied = 0u32;
-                for ch in ach_changes {
-                    let idc = match CString::new(ch.id.clone()) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-                    let ok = if ch.unlock {
-                        set_ach(stats, idc.as_ptr())
-                    } else {
-                        clear_ach(stats, idc.as_ptr())
-                    };
-                    if ok != 0 {
-                        applied += 1;
+                if !ach_changes.is_empty() {
+                    // Fail closed: never modify schema-protected achievements, even if a
+                    // stale or crafted renderer payload asks us to (these are irreversible
+                    // Steam mutations). If the permission schema can't be read we can't tell
+                    // which achievements are protected, so refuse *all* achievement writes.
+                    match self.read_ach_perms(app_id) {
+                        Some(ach_perms) => {
+                            for ch in ach_changes {
+                                // Same `& 3` mask as the read path; an unknown id (perm 0)
+                                // stays writable — Steam itself rejects bogus names.
+                                if (ach_perms.get(&ch.id).copied().unwrap_or(0) & 3) != 0 {
+                                    continue;
+                                }
+                                let idc = match CString::new(ch.id.clone()) {
+                                    Ok(c) => c,
+                                    Err(_) => continue,
+                                };
+                                let ok = if ch.unlock {
+                                    set_ach(stats, idc.as_ptr())
+                                } else {
+                                    clear_ach(stats, idc.as_ptr())
+                                };
+                                if ok != 0 {
+                                    applied += 1;
+                                }
+                            }
+                        }
+                        None => {
+                            return Err("無法讀取成就權限結構，已拒絕所有成就寫入".into());
+                        }
                     }
                 }
 
@@ -1079,14 +1100,16 @@ mod imp {
         }
 
         /// Map achievement API name -> schema `permission` bits (for protected detection).
-        fn read_ach_perms(&self, app_id: u32) -> std::collections::HashMap<String, i32> {
-            let mut out = std::collections::HashMap::new();
+        /// Achievement permission bits keyed by id, parsed from the local schema.
+        /// Returns `None` when the schema can't be read or parsed — callers that
+        /// gate writes on protection must fail closed in that case rather than
+        /// treat every achievement as unprotected.
+        fn read_ach_perms(&self, app_id: u32) -> Option<std::collections::HashMap<String, i32>> {
             let path = format!(r"{}\appcache\stats\UserGameStatsSchema_{}.bin", self.install, app_id);
-            let Ok(data) = std::fs::read(&path) else { return out };
-            let Some(root) = super::parse_kv(&data) else { return out };
-            let Some(stats) = root.child(&app_id.to_string()).and_then(|a| a.child("stats")) else {
-                return out;
-            };
+            let data = std::fs::read(&path).ok()?;
+            let root = super::parse_kv(&data)?;
+            let stats = root.child(&app_id.to_string()).and_then(|a| a.child("stats"))?;
+            let mut out = std::collections::HashMap::new();
             for group in &stats.children {
                 let Some(bits) = group.child("bits") else { continue };
                 for bit in &bits.children {
@@ -1096,7 +1119,7 @@ mod imp {
                     }
                 }
             }
-            out
+            Some(out)
         }
 
         /// Parse the local schema .bin for this game's int/float stat definitions.
