@@ -405,3 +405,6 @@ docs/superpowers/
 # Local release artifacts — portable build output (e.g. dist/*.exe). Built by
 # `cargo tauri build --no-bundle`; releases are published by CI, not committed.
 /dist/
+
+# Local-only working notes (Claude Code) — personal scratch, not shared.
+CLAUDE.local.md
