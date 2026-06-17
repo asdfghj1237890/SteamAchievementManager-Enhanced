@@ -8,6 +8,7 @@ import { loadGamesCache, saveGamesCache, saveSettings } from '../data/cache'
 import { translate, type Translate } from '../i18n'
 import type { GameChanges } from '../data/source'
 import { reducer, makeInitialState, type Action, type AppState } from './store'
+import { applyLoadedGame } from './applyLoadedGame'
 import { rootCssVars, styleTokens, themeTokens } from '../lib/theme'
 import {
   bulkApply, completionFlat, filteredAch, pendingCount, type BulkMode,
@@ -177,34 +178,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       source
         .loadGame(appId)
         .then((game) => {
-          dispatch((cur) => {
-            const ach: Record<string, boolean> = {}
-            const st: Record<string, number> = {}
-            game.achievements.forEach((a) => {
-              ach[a.id] = a.unlocked
-            })
-            game.stats.forEach((x) => {
-              st[x.id] = x.value
-            })
-            const patch: Partial<AppState> = {
-              loaded: { ...cur.loaded, [appId]: game },
-              achState: { ...cur.achState, [appId]: ach },
-              statState: { ...cur.statState, [appId]: st },
-              origAch: { ...cur.origAch, [appId]: { ...ach } },
-              origStat: { ...cur.origStat, [appId]: { ...st } },
-            }
-            // sync the list name with what Steam reports (fills in add-by-id rows)
-            if (game.name && cur.games.some((g) => (g.appId === appId || g.id === appId) && g.name !== game.name)) {
-              patch.games = cur.games.map((g) =>
-                g.appId === appId || g.id === appId ? { ...g, name: game.name } : g,
-              )
-            }
-            if (cur.activeAppId === appId) {
-              patch.detailStatus = 'ready'
-              patch.detailError = null
-            }
-            return patch
-          })
+          dispatch((cur) => applyLoadedGame(cur, appId, game))
         })
         .catch((e) => {
           dispatch((cur) =>
