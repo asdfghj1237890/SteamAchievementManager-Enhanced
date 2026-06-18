@@ -8,14 +8,20 @@
 use steam_core::completion_local;
 
 fn main() {
-    let app_id: u32 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let app_id: u32 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     if app_id == 0 {
         eprintln!("usage: completion <appid>");
         std::process::exit(2);
     }
     match completion_local(app_id) {
         Some((earned, total)) => {
-            let pct = if total > 0 { earned * 100 / total } else { 0 };
+            let pct = earned
+                .checked_mul(100)
+                .and_then(|value| value.checked_div(total))
+                .unwrap_or(0);
             println!("{{\"earned\":{earned},\"total\":{total}}}");
             eprintln!("{app_id} — {earned}/{total}（{pct}%），純讀檔、未啟動遊戲");
         }

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from '../../data'
-import { coverFastUrls, type CoverVariant } from './coverUrls'
+import {
+  coverFastUrls, coverKey, coverStateForKey, type CoverResolutionState, type CoverVariant,
+} from './coverUrls'
 
 // Resolved (appdetails API) URLs cached per `${variant}:${appId}` — session Map +
 // localStorage — so the lookup happens at most once per game/variant ever. '' marks a
@@ -17,9 +19,8 @@ const cache = new Map<string, string>(
     }
   })(),
 )
-const keyOf = (appId: string, variant: CoverVariant) => `${variant}:${appId}`
 const remember = (appId: string, variant: CoverVariant, url: string) => {
-  cache.set(keyOf(appId, variant), url)
+  cache.set(coverKey(appId, variant), url)
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(Object.fromEntries(cache)))
   } catch {
@@ -35,12 +36,17 @@ const remember = (appId: string, variant: CoverVariant, url: string) => {
  */
 export function useCoverUrl(appId: string, variant: CoverVariant) {
   const urls = coverFastUrls(appId, variant)
-  const key = keyOf(appId, variant)
-  const [idx, setIdx] = useState(0)
-  // undefined = still trying the fast paths; string = API result ('' means none).
-  const [resolved, setResolved] = useState<string | undefined>(() =>
-    cache.has(key) ? cache.get(key) : undefined,
+  const key = coverKey(appId, variant)
+  const cached = cache.has(key) ? cache.get(key) : undefined
+  const [state, setState] = useState<CoverResolutionState>(() =>
+    coverStateForKey(undefined, appId, variant, cached),
   )
+  const current = coverStateForKey(state, appId, variant, cached)
+  const { idx, resolved } = current
+
+  useEffect(() => {
+    setState((cur) => coverStateForKey(cur, appId, variant, cache.has(key) ? cache.get(key) : undefined))
+  }, [appId, variant, key])
 
   // Once the fast paths are exhausted, ask Steam's appdetails API for the real URL.
   useEffect(() => {
@@ -49,11 +55,15 @@ export function useCoverUrl(appId: string, variant: CoverVariant) {
     invoke<string>('game_header', { appId })
       .then((u) => {
         remember(appId, variant, u)
-        if (!cancelled) setResolved(u)
+        if (!cancelled) {
+          setState((cur) => ({ ...coverStateForKey(cur, appId, variant, undefined), resolved: u }))
+        }
       })
       .catch(() => {
         remember(appId, variant, '')
-        if (!cancelled) setResolved('')
+        if (!cancelled) {
+          setState((cur) => ({ ...coverStateForKey(cur, appId, variant, undefined), resolved: '' }))
+        }
       })
     return () => {
       cancelled = true
@@ -62,11 +72,12 @@ export function useCoverUrl(appId: string, variant: CoverVariant) {
 
   const src = resolved !== undefined ? resolved || undefined : urls[idx]
   const onError = () => {
-    if (resolved === undefined) setIdx((i) => i + 1)
-    else {
+    setState((cur) => {
+      const next = coverStateForKey(cur, appId, variant, cache.has(key) ? cache.get(key) : undefined)
+      if (next.resolved === undefined) return { ...next, idx: next.idx + 1 }
       remember(appId, variant, '')
-      setResolved('')
-    }
+      return { ...next, resolved: '' }
+    })
   }
 
   return { src, onError }

@@ -1,7 +1,7 @@
 {
   "name": "sam-achievement-manager-web",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "Modern UI redesign of Steam Achievement Manager (web prototype) — React + Vite + TypeScript port of the Claude Design handoff.",
   "scripts": {

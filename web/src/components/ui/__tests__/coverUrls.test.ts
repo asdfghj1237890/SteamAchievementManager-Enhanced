@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { coverFastUrls } from '../coverUrls'
+import { coverFastUrls, coverStateForKey } from '../coverUrls'
 
 const CDN = 'https://cdn.cloudflare.steamstatic.com/steam/apps'
 
@@ -13,5 +13,15 @@ describe('coverFastUrls', () => {
       `${CDN}/261640/library_hero.jpg`,
       `${CDN}/261640/header.jpg`,
     ])
+  })
+
+  it('resets resolution state when the app id changes', () => {
+    const previous = { key: 'hero:10', idx: 2, resolved: 'https://cdn.example/old.jpg' }
+
+    expect(coverStateForKey(previous, '20', 'hero', undefined)).toEqual({
+      key: 'hero:20',
+      idx: 0,
+      resolved: undefined,
+    })
   })
 })

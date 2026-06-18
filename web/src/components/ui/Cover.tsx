@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { isTauri } from '../../data'
 import { useCoverUrl } from './useCoverUrl'
 
@@ -15,6 +15,10 @@ export default function Cover({
 }) {
   const { src, onError } = useCoverUrl(appId, 'capsule')
   const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    setLoaded(false)
+  }, [src, appId])
 
   return (
     <div style={style}>

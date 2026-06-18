@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useApp } from '../state/AppContext'
 import { completion, points } from '../lib/achievements'
@@ -15,6 +15,9 @@ export default function GameHeader() {
   const loc = useLocation()
   const { src: heroSrc, onError: onHeroError } = useCoverUrl(activeGame?.appId ?? '', 'hero')
   const [heroLoaded, setHeroLoaded] = useState(false)
+  useEffect(() => {
+    setHeroLoaded(false)
+  }, [heroSrc, activeGame?.appId])
   if (!activeGame) return null
 
   const g = activeGame

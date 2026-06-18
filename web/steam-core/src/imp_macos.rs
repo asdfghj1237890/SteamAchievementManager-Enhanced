@@ -2,8 +2,12 @@
 //! via dlopen and mirrors the read surface of the Windows `imp` module. Writes
 //! are deferred this milestone (see lib.rs `write_game`).
 
-use super::{AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatInfo};
+use super::{
+    choose_account_id_with_preferred, parse_most_recent_account_id, writable_stat_def, AchChange,
+    AchievementInfo, GameStats, OwnedGame, StatChange, StatDef, StatInfo,
+};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[allow(non_snake_case)]
@@ -72,23 +76,41 @@ fn user_stats_path(root: &str, account_id: u32, app_id: u32) -> String {
     format!("{root}/appcache/stats/UserGameStats_{account_id}_{app_id}.bin")
 }
 
-fn find_account_id(root: &str) -> Option<u32> {
-    for entry in std::fs::read_dir(format!("{root}/userdata")).ok()?.flatten() {
-        if let Some(id) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) {
-            if id != 0 {
-                return Some(id);
-            }
-        }
-    }
-    None
+fn account_ids(root: &str) -> Vec<u32> {
+    let mut ids: Vec<u32> = std::fs::read_dir(format!("{root}/userdata"))
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+        })
+        .filter(|id| *id != 0)
+        .collect();
+    ids.sort_unstable();
+    ids
 }
 
-struct StatDef {
-    id: String,
-    name: String,
-    is_float: bool,
-    permission: i32,
-    increment_only: bool,
+fn most_recent_account_id(root: &str, accounts: &[u32]) -> Option<u32> {
+    let txt = std::fs::read_to_string(format!("{root}/config/loginusers.vdf")).ok()?;
+    parse_most_recent_account_id(&txt, accounts)
+}
+
+fn find_account_id(root: &str) -> Option<u32> {
+    let accounts = account_ids(root);
+    let preferred = most_recent_account_id(root, &accounts);
+    choose_account_id_with_preferred(accounts, preferred, |_| false)
+}
+
+fn find_account_id_for_game(root: &str, app_id: u32) -> Option<u32> {
+    let accounts = account_ids(root);
+    let preferred = most_recent_account_id(root, &accounts);
+    choose_account_id_with_preferred(accounts, preferred, |account_id| {
+        Path::new(&user_stats_path(root, account_id, app_id)).is_file()
+    })
 }
 
 fn resolve_stat_type(stat: &super::Kv) -> u8 {
@@ -96,14 +118,15 @@ fn resolve_stat_type(stat: &super::Kv) -> u8 {
         .child("type")
         .map(|n| {
             if let Some(s) = n.as_str() {
-                s.parse::<i32>().unwrap_or_else(|_| match s.to_ascii_lowercase().as_str() {
-                    "integer" | "int" => 1,
-                    "float" => 2,
-                    "averagerate" => 3,
-                    "achievements" => 4,
-                    "groupachievements" => 5,
-                    _ => 0,
-                })
+                s.parse::<i32>()
+                    .unwrap_or_else(|_| match s.to_ascii_lowercase().as_str() {
+                        "integer" | "int" => 1,
+                        "float" => 2,
+                        "averagerate" => 3,
+                        "achievements" => 4,
+                        "groupachievements" => 5,
+                        _ => 0,
+                    })
             } else {
                 n.as_int()
             }
@@ -115,8 +138,8 @@ fn resolve_stat_type(stat: &super::Kv) -> u8 {
         raw
     };
     match raw {
-        1 => 1,      // Integer
-        2 | 3 => 2,  // Float / AverageRate
+        1 => 1,     // Integer
+        2 | 3 => 2, // Float / AverageRate
         _ => 0,
     }
 }
@@ -159,10 +182,13 @@ pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
         return None;
     }
 
-    let earned = find_account_id(&root)
+    let earned = find_account_id_for_game(&root, app_id)
         .and_then(|account_id| std::fs::read(user_stats_path(&root, account_id, app_id)).ok())
         .and_then(|d| super::parse_kv(&d))
-        .and_then(|kv| kv.child("cache").map(|c| count_children(c, "AchievementTimes")))
+        .and_then(|kv| {
+            kv.child("cache")
+                .map(|c| count_children(c, "AchievementTimes"))
+        })
         .unwrap_or(0);
 
     Some((earned.min(total), total))
@@ -172,35 +198,60 @@ pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
 /// cloud store (`config/cloudstorage/cloud-storage-namespace-1.json`). Read-only, no
 /// Steam connection. Legacy `sharedconfig.vdf` tags are not read on macOS yet.
 pub fn read_categories() -> Vec<(u32, Vec<String>)> {
-    let Some(root) = steam_root() else { return Vec::new() };
-    let Some(account) = find_account_id(&root) else { return Vec::new() };
+    let Some(root) = steam_root() else {
+        return Vec::new();
+    };
+    let Some(account) = find_account_id(&root) else {
+        return Vec::new();
+    };
     let path =
         format!("{root}/userdata/{account}/config/cloudstorage/cloud-storage-namespace-1.json");
-    let Ok(txt) = std::fs::read_to_string(&path) else { return Vec::new() };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) else { return Vec::new() };
+    let Ok(txt) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) else {
+        return Vec::new();
+    };
     let mut map: std::collections::HashMap<u32, std::collections::BTreeSet<String>> =
         std::collections::HashMap::new();
     for pair in json.as_array().into_iter().flatten() {
         let Some(p) = pair.as_array() else { continue };
-        let Some(key) = p.first().and_then(|k| k.as_str()) else { continue };
+        let Some(key) = p.first().and_then(|k| k.as_str()) else {
+            continue;
+        };
         if !key.starts_with("user-collections.") {
             continue;
         }
-        let Some(vs) = p.get(1).and_then(|e| e.get("value")).and_then(|v| v.as_str()) else {
+        let Some(vs) = p
+            .get(1)
+            .and_then(|e| e.get("value"))
+            .and_then(|v| v.as_str())
+        else {
             continue;
         };
-        let Ok(coll) = serde_json::from_str::<serde_json::Value>(vs) else { continue };
-        let Some(name) = coll.get("name").and_then(|n| n.as_str()) else { continue };
+        let Ok(coll) = serde_json::from_str::<serde_json::Value>(vs) else {
+            continue;
+        };
+        let Some(name) = coll.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
         if name.is_empty() {
             continue;
         }
-        for app in coll.get("added").and_then(|a| a.as_array()).into_iter().flatten() {
+        for app in coll
+            .get("added")
+            .and_then(|a| a.as_array())
+            .into_iter()
+            .flatten()
+        {
             if let Some(id) = app.as_u64() {
                 map.entry(id as u32).or_default().insert(name.to_string());
             }
         }
     }
-    map.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect()
+    map.into_iter()
+        .map(|(k, v)| (k, v.into_iter().collect()))
+        .collect()
 }
 
 pub struct SteamClient {
@@ -265,7 +316,15 @@ impl SteamClient {
                 return Err("取得 ISteamApps 介面失敗".into());
             }
 
-            Ok(SteamClient { module, client, pipe, user, apps008, apps001, root })
+            Ok(SteamClient {
+                module,
+                client,
+                pipe,
+                user,
+                apps008,
+                apps001,
+                root,
+            })
         }
     }
 
@@ -291,7 +350,13 @@ impl SteamClient {
                 vfn(self.apps001, 0);
             let k = CString::new(key).ok()?;
             let mut buf = vec![0u8; 1024];
-            let n = f(self.apps001, app_id, k.as_ptr(), buf.as_mut_ptr() as *mut c_char, buf.len() as i32);
+            let n = f(
+                self.apps001,
+                app_id,
+                k.as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as i32,
+            );
             if n == 0 {
                 return None;
             }
@@ -320,7 +385,11 @@ impl SteamClient {
             .map(|(id, kind)| OwnedGame {
                 app_id: *id,
                 name: self.app_data(*id, "name").unwrap_or_else(|| id.to_string()),
-                kind: if kind.is_empty() { "normal".into() } else { kind.clone() },
+                kind: if kind.is_empty() {
+                    "normal".into()
+                } else {
+                    kind.clone()
+                },
             })
             .collect()
     }
@@ -358,7 +427,12 @@ impl SteamClient {
         };
         let start = Instant::now();
         loop {
-            let mut msg = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+            let mut msg = CallbackMsg {
+                user: 0,
+                id: 0,
+                param: std::ptr::null_mut(),
+                param_size: 0,
+            };
             let mut call: i32 = 0;
             if get_cb(self.pipe, &mut msg, &mut call) != 0 {
                 let hit = msg.id == callback_id;
@@ -389,11 +463,16 @@ impl SteamClient {
         // (still downloading) and GetNumAchievements is still 0. A SECOND callback
         // then arrives with k_EResultOK once the schema is loaded. So we must wait
         // for THIS app's UserStatsReceived with result OK — not just any callback.
-        let want_app: u32 = std::env::var("SteamAppId").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let want_app: u32 = std::env::var("SteamAppId")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
 
         let (Ok(get_cb), Ok(free_cb)) = (
-            self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>("Steam_BGetCallback"),
+            self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>(
+                "Steam_BGetCallback",
+            ),
             self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
         ) else {
             // exports missing → fall back to the old single-callback wait
@@ -407,7 +486,12 @@ impl SteamClient {
         let start = Instant::now();
         loop {
             let mut got_ok = false;
-            let mut msg = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+            let mut msg = CallbackMsg {
+                user: 0,
+                id: 0,
+                param: std::ptr::null_mut(),
+                param_size: 0,
+            };
             let mut call: i32 = 0;
             while get_cb(self.pipe, &mut msg, &mut call) != 0 {
                 if msg.id == USER_STATS_RECEIVED && !msg.param.is_null() && msg.param_size >= 12 {
@@ -445,10 +529,14 @@ impl SteamClient {
     fn read_ach_perms(&self, app_id: u32) -> Option<std::collections::HashMap<String, i32>> {
         let data = std::fs::read(schema_path(&self.root, app_id)).ok()?;
         let root = super::parse_kv(&data)?;
-        let stats = root.child(&app_id.to_string()).and_then(|a| a.child("stats"))?;
+        let stats = root
+            .child(&app_id.to_string())
+            .and_then(|a| a.child("stats"))?;
         let mut out = std::collections::HashMap::new();
         for group in &stats.children {
-            let Some(bits) = group.child("bits") else { continue };
+            let Some(bits) = group.child("bits") else {
+                continue;
+            };
             for bit in &bits.children {
                 if let Some(id) = bit.child("name").and_then(|n| n.as_str()) {
                     let perm = bit.child("permission").map(|p| p.as_int()).unwrap_or(0);
@@ -479,7 +567,11 @@ impl SteamClient {
             if kind == 0 {
                 continue;
             }
-            let id = stat.child("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            let id = stat
+                .child("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
             if id.is_empty() {
                 continue;
             }
@@ -487,7 +579,10 @@ impl SteamClient {
                 name: resolve_display_name(stat, &lang, &id),
                 is_float: kind == 2,
                 permission: stat.child("permission").map(|p| p.as_int()).unwrap_or(0),
-                increment_only: stat.child("incrementonly").map(|p| p.as_bool()).unwrap_or(false),
+                increment_only: stat
+                    .child("incrementonly")
+                    .map(|p| p.as_bool())
+                    .unwrap_or(false),
                 id,
             });
         }
@@ -500,8 +595,11 @@ impl SteamClient {
 
             let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
             let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
-            let get_disp: extern "C" fn(*mut c_void, *const c_char, *const c_char) -> *const c_char =
-                vfn(stats, 11);
+            let get_disp: extern "C" fn(
+                *mut c_void,
+                *const c_char,
+                *const c_char,
+            ) -> *const c_char = vfn(stats, 11);
             let get_aut: extern "C" fn(*mut c_void, *const c_char, *mut u8, *mut u32) -> u8 =
                 vfn(stats, 8);
 
@@ -510,16 +608,27 @@ impl SteamClient {
             let get_pct: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 36);
             req_global(stats);
             let mut have_global = false;
-            let probe_ptr = if num(stats) > 0 { get_name(stats, 0) } else { std::ptr::null() };
+            let probe_ptr = if num(stats) > 0 {
+                get_name(stats, 0)
+            } else {
+                std::ptr::null()
+            };
             if !probe_ptr.is_null() {
                 if let Ok(probe) = CString::new(cstr(probe_ptr)) {
                     if let (Ok(get_cb), Ok(free_cb)) = (
-                        self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>("Steam_BGetCallback"),
+                        self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>(
+                            "Steam_BGetCallback",
+                        ),
                         self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
                     ) {
                         let start = Instant::now();
                         while start.elapsed() < Duration::from_secs(8) {
-                            let mut m = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+                            let mut m = CallbackMsg {
+                                user: 0,
+                                id: 0,
+                                param: std::ptr::null_mut(),
+                                param_size: 0,
+                            };
                             let mut c: i32 = 0;
                             while get_cb(self.pipe, &mut m, &mut c) != 0 {
                                 free_cb(self.pipe);
@@ -590,7 +699,8 @@ impl SteamClient {
 
             // ---- statistics ----
             let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 = vfn(stats, 1);
-            let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 0);
+            let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 =
+                vfn(stats, 0);
             let mut stat_infos = Vec::new();
             for d in self.read_stat_defs(app_id) {
                 let idc = match CString::new(d.id.clone()) {
@@ -622,7 +732,9 @@ impl SteamClient {
 
             Ok(GameStats {
                 app_id,
-                name: self.app_data(app_id, "name").unwrap_or_else(|| app_id.to_string()),
+                name: self
+                    .app_data(app_id, "name")
+                    .unwrap_or_else(|| app_id.to_string()),
                 achievements,
                 stats: stat_infos,
             })
@@ -710,21 +822,22 @@ impl SteamClient {
 
             if !stat_changes.is_empty() {
                 let defs = self.read_stat_defs(app_id);
-                let floats: std::collections::HashSet<String> =
-                    defs.iter().filter(|d| d.is_float).map(|d| d.id.clone()).collect();
-                let inc_only: std::collections::HashSet<String> =
-                    defs.iter().filter(|d| d.increment_only).map(|d| d.id.clone()).collect();
-                let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 = vfn(stats, 1);
-                let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 0);
+                let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 =
+                    vfn(stats, 1);
+                let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 =
+                    vfn(stats, 0);
                 for sc in stat_changes {
+                    let Some(def) = writable_stat_def(&defs, sc) else {
+                        continue;
+                    };
                     let idc = match CString::new(sc.id.clone()) {
                         Ok(c) => c,
                         Err(_) => continue,
                     };
                     // Never lower an increment-only stat: read the current value and skip
                     // the write if this change would decrease it.
-                    if inc_only.contains(&sc.id) {
-                        let cur = if floats.contains(&sc.id) {
+                    if def.increment_only {
+                        let cur = if def.is_float {
                             let mut v: f32 = 0.0;
                             get_float(stats, idc.as_ptr(), &mut v);
                             v as f64
@@ -737,7 +850,7 @@ impl SteamClient {
                             continue;
                         }
                     }
-                    let ok = if floats.contains(&sc.id) {
+                    let ok = if def.is_float {
                         set_float(stats, idc.as_ptr(), sc.value as f32)
                     } else {
                         set_int(stats, idc.as_ptr(), sc.value as i32)
@@ -782,7 +895,13 @@ mod tests {
 
     #[test]
     fn cache_paths_use_forward_slashes() {
-        assert_eq!(schema_path("/S", 42), "/S/appcache/stats/UserGameStatsSchema_42.bin");
-        assert_eq!(user_stats_path("/S", 7, 42), "/S/appcache/stats/UserGameStats_7_42.bin");
+        assert_eq!(
+            schema_path("/S", 42),
+            "/S/appcache/stats/UserGameStatsSchema_42.bin"
+        );
+        assert_eq!(
+            user_stats_path("/S", 7, 42),
+            "/S/appcache/stats/UserGameStats_7_42.bin"
+        );
     }
 }

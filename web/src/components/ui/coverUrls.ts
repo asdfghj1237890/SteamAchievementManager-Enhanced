@@ -6,6 +6,24 @@ export type CoverVariant = 'capsule' | 'hero'
 
 const CDN = 'https://cdn.cloudflare.steamstatic.com/steam/apps'
 
+export interface CoverResolutionState {
+  key: string
+  idx: number
+  resolved: string | undefined
+}
+
+export const coverKey = (appId: string, variant: CoverVariant): string => `${variant}:${appId}`
+
+export const coverStateForKey = (
+  state: CoverResolutionState | undefined,
+  appId: string,
+  variant: CoverVariant,
+  cached: string | undefined,
+): CoverResolutionState => {
+  const key = coverKey(appId, variant)
+  return state?.key === key ? state : { key, idx: 0, resolved: cached }
+}
+
 /**
  * Guessable CDN URLs to try, in priority order, before asking the appdetails API.
  * - `capsule` (library grid): the legacy 460×215 header works for most older games.

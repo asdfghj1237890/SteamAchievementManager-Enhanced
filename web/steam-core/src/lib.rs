@@ -32,7 +32,9 @@ pub fn parse_app_list(xml: &str) -> Vec<(u32, String)> {
             })
             .unwrap_or_default();
         let body = &chunk[gt + 1..];
-        let Some(end) = body.find("</game>") else { continue };
+        let Some(end) = body.find("</game>") else {
+            continue;
+        };
         if let Ok(id) = body[..end].trim().parse::<u32>() {
             out.push((id, kind));
         }
@@ -60,7 +62,8 @@ pub fn fetch_app_list() -> Result<Vec<(u32, String)>, String> {
 /// serve art from content-hash paths that can't be guessed from the appid, so this
 /// is the only reliable source for them. Network read-only; None on any failure.
 pub fn fetch_header_url(app_id: u32) -> Option<String> {
-    let url = format!("https://store.steampowered.com/api/appdetails?appids={app_id}&filters=basic");
+    let url =
+        format!("https://store.steampowered.com/api/appdetails?appids={app_id}&filters=basic");
     let body = ureq::get(&url)
         .timeout(std::time::Duration::from_secs(10))
         .call()
@@ -126,6 +129,129 @@ pub struct StatChange {
     pub value: f64,
 }
 
+#[derive(Debug, Clone)]
+struct StatDef {
+    id: String,
+    name: String,
+    is_float: bool,
+    permission: i32,
+    increment_only: bool,
+}
+
+fn writable_stat_def<'a>(defs: &'a [StatDef], change: &StatChange) -> Option<&'a StatDef> {
+    defs.iter()
+        .find(|d| d.id == change.id)
+        .filter(|d| (d.permission & 2) == 0)
+}
+
+#[cfg(test)]
+fn choose_account_id<I, F>(accounts: I, has_game_cache: F) -> Option<u32>
+where
+    I: IntoIterator<Item = u32>,
+    F: FnMut(u32) -> bool,
+{
+    choose_account_id_with_preferred(accounts, None, has_game_cache)
+}
+
+fn choose_account_id_with_preferred<I, F>(
+    accounts: I,
+    preferred: Option<u32>,
+    mut has_game_cache: F,
+) -> Option<u32>
+where
+    I: IntoIterator<Item = u32>,
+    F: FnMut(u32) -> bool,
+{
+    let ids: Vec<u32> = accounts.into_iter().filter(|id| *id != 0).collect();
+    if let Some(id) = preferred.filter(|id| ids.contains(id)) {
+        return Some(id);
+    }
+    ids.iter()
+        .copied()
+        .find(|id| has_game_cache(*id))
+        .or_else(|| ids.first().copied())
+}
+
+fn account_id_from_steam_id(steam_id: u64) -> Option<u32> {
+    let account_id = (steam_id & 0xFFFF_FFFF) as u32;
+    (account_id != 0).then_some(account_id)
+}
+
+fn parse_most_recent_account_id(loginusers_vdf: &str, accounts: &[u32]) -> Option<u32> {
+    let tokens = text_vdf_tokens(loginusers_vdf);
+    let mut i = 0usize;
+    while i + 1 < tokens.len() {
+        let Some(account_id) = tokens[i]
+            .parse::<u64>()
+            .ok()
+            .and_then(account_id_from_steam_id)
+            .filter(|id| accounts.contains(id))
+        else {
+            i += 1;
+            continue;
+        };
+        if tokens.get(i + 1).map(String::as_str) != Some("{") {
+            i += 1;
+            continue;
+        }
+        i += 2;
+        let mut depth = 1usize;
+        while i + 1 < tokens.len() && depth > 0 {
+            match tokens[i].as_str() {
+                "{" => depth += 1,
+                "}" => depth -= 1,
+                key if depth == 1 && key.eq_ignore_ascii_case("MostRecent") => {
+                    if tokens.get(i + 1).map(String::as_str) == Some("1") {
+                        return Some(account_id);
+                    }
+                    i += 1;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Tokenize text VDF into quoted-string / `{` / `}` tokens (skips `//` comments).
+fn text_vdf_tokens(s: &str) -> Vec<String> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    let mut out = Vec::new();
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i += 1;
+                let start = i;
+                while i < b.len() && b[i] != b'"' {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                out.push(s[start..i.min(s.len())].to_string());
+                i += 1;
+            }
+            b'{' => {
+                out.push("{".into());
+                i += 1;
+            }
+            b'}' => {
+                out.push("}".into());
+                i += 1;
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
 // ---------- Valve binary KeyValues (for UserGameStatsSchema_<appid>.bin) ----------
 // Strings are UTF-8 null-terminated; numbers little-endian; nested objects end at
 // a type byte of 8.
@@ -147,7 +273,9 @@ struct Kv {
 
 impl Kv {
     fn child(&self, key: &str) -> Option<&Kv> {
-        self.children.iter().find(|c| c.name.eq_ignore_ascii_case(key))
+        self.children
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(key))
     }
     fn as_str(&self) -> Option<&str> {
         if let KvValue::Str(s) = &self.value {
@@ -230,7 +358,11 @@ fn parse_kv_children(r: &mut KvReader) -> Option<Vec<Kv>> {
             7 => (KvValue::UInt64(r.u64()?), Vec::new()),
             _ => return None, // WideString / unknown
         };
-        out.push(Kv { name, value, children });
+        out.push(Kv {
+            name,
+            value,
+            children,
+        });
     }
     Some(out)
 }
@@ -238,13 +370,86 @@ fn parse_kv_children(r: &mut KvReader) -> Option<Vec<Kv>> {
 fn parse_kv(data: &[u8]) -> Option<Kv> {
     let mut r = KvReader { data, pos: 0 };
     let children = parse_kv_children(&mut r)?;
-    Some(Kv { name: "<root>".into(), value: KvValue::None, children })
+    Some(Kv {
+        name: "<root>".into(),
+        value: KvValue::None,
+        children,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{choose_account_id, writable_stat_def, StatChange, StatDef};
+
+    fn stat(id: &str, is_float: bool, permission: i32, increment_only: bool) -> StatDef {
+        StatDef {
+            id: id.to_string(),
+            name: id.to_string(),
+            is_float,
+            permission,
+            increment_only,
+        }
+    }
+
+    #[test]
+    fn writable_stat_def_rejects_protected_and_unknown_stats() {
+        let defs = vec![
+            stat("kills", false, 0, false),
+            stat("rank", false, 2, false),
+        ];
+
+        let writable = writable_stat_def(
+            &defs,
+            &StatChange {
+                id: "kills".into(),
+                value: 7.0,
+            },
+        );
+        assert_eq!(writable.map(|d| d.id.as_str()), Some("kills"));
+
+        let protected = writable_stat_def(
+            &defs,
+            &StatChange {
+                id: "rank".into(),
+                value: 9.0,
+            },
+        );
+        assert!(protected.is_none());
+
+        let unknown = writable_stat_def(
+            &defs,
+            &StatChange {
+                id: "crafted".into(),
+                value: 1.0,
+            },
+        );
+        assert!(unknown.is_none());
+    }
+
+    #[test]
+    fn choose_account_id_prefers_account_with_game_cache() {
+        let accounts = [101, 202, 303];
+        let chosen = choose_account_id(accounts, |id| id == 202);
+        assert_eq!(chosen, Some(202));
+    }
+
+    #[test]
+    fn choose_account_id_falls_back_to_first_account() {
+        let accounts = [101, 202, 303];
+        let chosen = choose_account_id(accounts, |_| false);
+        assert_eq!(chosen, Some(101));
+    }
 }
 
 #[cfg(windows)]
 mod imp {
-    use super::{AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatInfo};
+    use super::{
+        choose_account_id_with_preferred, parse_most_recent_account_id, text_vdf_tokens,
+        writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatDef,
+        StatInfo,
+    };
     use std::ffi::{c_char, c_void, CStr, CString};
+    use std::path::Path;
     use std::time::{Duration, Instant};
 
     #[allow(non_snake_case)]
@@ -307,27 +512,20 @@ mod imp {
         None
     }
 
-    struct StatDef {
-        id: String,
-        name: String,
-        is_float: bool,
-        permission: i32,
-        increment_only: bool,
-    }
-
     fn resolve_stat_type(stat: &super::Kv) -> u8 {
         let raw = stat
             .child("type")
             .map(|n| {
                 if let Some(s) = n.as_str() {
-                    s.parse::<i32>().unwrap_or_else(|_| match s.to_ascii_lowercase().as_str() {
-                        "integer" | "int" => 1,
-                        "float" => 2,
-                        "averagerate" => 3,
-                        "achievements" => 4,
-                        "groupachievements" => 5,
-                        _ => 0,
-                    })
+                    s.parse::<i32>()
+                        .unwrap_or_else(|_| match s.to_ascii_lowercase().as_str() {
+                            "integer" | "int" => 1,
+                            "float" => 2,
+                            "averagerate" => 3,
+                            "achievements" => 4,
+                            "groupachievements" => 5,
+                            _ => 0,
+                        })
                 } else {
                     n.as_int()
                 }
@@ -339,7 +537,7 @@ mod imp {
             raw
         };
         match raw {
-            1 => 1, // Integer
+            1 => 1,     // Integer
             2 | 3 => 2, // Float / AverageRate
             _ => 0,
         }
@@ -362,15 +560,46 @@ mod imp {
             .to_string()
     }
 
+    fn account_ids(install: &str) -> Vec<u32> {
+        let mut ids: Vec<u32> = std::fs::read_dir(format!(r"{install}\userdata"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|n| n.parse::<u32>().ok())
+            })
+            .filter(|id| *id != 0)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn user_stats_path(install: &str, account_id: u32, app_id: u32) -> String {
+        format!(r"{install}\appcache\stats\UserGameStats_{account_id}_{app_id}.bin")
+    }
+
+    fn most_recent_account_id(install: &str, accounts: &[u32]) -> Option<u32> {
+        let path = format!(r"{install}\config\loginusers.vdf");
+        let txt = std::fs::read_to_string(path).ok()?;
+        parse_most_recent_account_id(&txt, accounts)
+    }
+
     fn find_account_id(install: &str) -> Option<u32> {
-        for entry in std::fs::read_dir(format!(r"{install}\userdata")).ok()?.flatten() {
-            if let Some(id) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) {
-                if id != 0 {
-                    return Some(id);
-                }
-            }
-        }
-        None
+        let accounts = account_ids(install);
+        let preferred = most_recent_account_id(install, &accounts);
+        choose_account_id_with_preferred(accounts, preferred, |_| false)
+    }
+
+    fn find_account_id_for_game(install: &str, app_id: u32) -> Option<u32> {
+        let accounts = account_ids(install);
+        let preferred = most_recent_account_id(install, &accounts);
+        choose_account_id_with_preferred(accounts, preferred, |account_id| {
+            Path::new(&user_stats_path(install, account_id, app_id)).is_file()
+        })
     }
 
     /// For each child of `node`, count the children of its `key` sub-node. Sum.
@@ -400,15 +629,15 @@ mod imp {
         }
 
         // earned = AchievementTimes entries in the per-user cache
-        let earned = find_account_id(&install)
+        let earned = find_account_id_for_game(&install, app_id)
             .and_then(|account_id| {
-                std::fs::read(format!(
-                    r"{install}\appcache\stats\UserGameStats_{account_id}_{app_id}.bin"
-                ))
-                .ok()
+                std::fs::read(user_stats_path(&install, account_id, app_id)).ok()
             })
             .and_then(|d| super::parse_kv(&d))
-            .and_then(|kv| kv.child("cache").map(|c| count_children(c, "AchievementTimes")))
+            .and_then(|kv| {
+                kv.child("cache")
+                    .map(|c| count_children(c, "AchievementTimes"))
+            })
             .unwrap_or(0);
 
         Some((earned.min(total), total))
@@ -419,44 +648,6 @@ mod imp {
     enum VdfVal {
         Str(String),
         Obj(Vec<(String, VdfVal)>),
-    }
-
-    /// Tokenize text VDF into quoted-string / `{` / `}` tokens (skips `//` comments).
-    fn vdf_tokens(s: &str) -> Vec<String> {
-        let b = s.as_bytes();
-        let mut i = 0usize;
-        let mut out = Vec::new();
-        while i < b.len() {
-            match b[i] {
-                b'"' => {
-                    i += 1;
-                    let start = i;
-                    while i < b.len() && b[i] != b'"' {
-                        if b[i] == b'\\' {
-                            i += 1;
-                        }
-                        i += 1;
-                    }
-                    out.push(s[start..i.min(s.len())].to_string());
-                    i += 1;
-                }
-                b'{' => {
-                    out.push("{".into());
-                    i += 1;
-                }
-                b'}' => {
-                    out.push("}".into());
-                    i += 1;
-                }
-                b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
-                    while i < b.len() && b[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                _ => i += 1,
-            }
-        }
-        out
     }
 
     fn parse_vdf(tokens: &[String], pos: &mut usize) -> Vec<(String, VdfVal)> {
@@ -522,20 +713,34 @@ mod imp {
             if let Ok(root) = serde_json::from_str::<serde_json::Value>(&txt) {
                 for pair in root.as_array().into_iter().flatten() {
                     let Some(p) = pair.as_array() else { continue };
-                    let Some(key) = p.first().and_then(|k| k.as_str()) else { continue };
+                    let Some(key) = p.first().and_then(|k| k.as_str()) else {
+                        continue;
+                    };
                     if !key.starts_with("user-collections.") {
                         continue;
                     }
-                    let Some(vs) = p.get(1).and_then(|e| e.get("value")).and_then(|v| v.as_str())
+                    let Some(vs) = p
+                        .get(1)
+                        .and_then(|e| e.get("value"))
+                        .and_then(|v| v.as_str())
                     else {
                         continue;
                     };
-                    let Ok(coll) = serde_json::from_str::<serde_json::Value>(vs) else { continue };
-                    let Some(name) = coll.get("name").and_then(|n| n.as_str()) else { continue };
+                    let Ok(coll) = serde_json::from_str::<serde_json::Value>(vs) else {
+                        continue;
+                    };
+                    let Some(name) = coll.get("name").and_then(|n| n.as_str()) else {
+                        continue;
+                    };
                     if name.is_empty() {
                         continue;
                     }
-                    for app in coll.get("added").and_then(|a| a.as_array()).into_iter().flatten() {
+                    for app in coll
+                        .get("added")
+                        .and_then(|a| a.as_array())
+                        .into_iter()
+                        .flatten()
+                    {
                         if let Some(id) = app.as_u64() {
                             map.entry(id as u32).or_default().insert(name.to_string());
                         }
@@ -547,13 +752,15 @@ mod imp {
         // 2) Legacy categories: userdata/<id>/7/remote/sharedconfig.vdf (apps/<id>/tags).
         let vdf = format!(r"{install}\userdata\{account}\7\remote\sharedconfig.vdf");
         if let Ok(txt) = std::fs::read_to_string(&vdf) {
-            let tokens = vdf_tokens(&txt);
+            let tokens = text_vdf_tokens(&txt);
             let mut pos = 0;
             let tree = parse_vdf(&tokens, &mut pos);
             if let Some(apps) = vdf_find(&tree, "apps") {
                 for (app_str, v) in apps {
                     let VdfVal::Obj(app) = v else { continue };
-                    let Ok(app_id) = app_str.parse::<u32>() else { continue };
+                    let Ok(app_id) = app_str.parse::<u32>() else {
+                        continue;
+                    };
                     if let Some(tags) = vdf_child(app, "tags") {
                         for (_, tv) in tags {
                             if let VdfVal::Str(s) = tv {
@@ -609,8 +816,11 @@ mod imp {
                     "steamclient.dll"
                 };
                 let dll = format!(r"{install}\{dll_name}");
-                let module =
-                    LoadLibraryExW(wide(&dll).as_ptr(), std::ptr::null_mut(), LOAD_WITH_ALTERED_SEARCH_PATH);
+                let module = LoadLibraryExW(
+                    wide(&dll).as_ptr(),
+                    std::ptr::null_mut(),
+                    LOAD_WITH_ALTERED_SEARCH_PATH,
+                );
                 if module.is_null() {
                     return Err(format!("無法載入 {dll}"));
                 }
@@ -653,7 +863,15 @@ mod imp {
                     return Err("取得 ISteamApps 介面失敗".into());
                 }
 
-                Ok(SteamClient { module, client, pipe, user, apps008, apps001, install })
+                Ok(SteamClient {
+                    module,
+                    client,
+                    pipe,
+                    user,
+                    apps008,
+                    apps001,
+                    install,
+                })
             }
         }
 
@@ -681,7 +899,13 @@ mod imp {
                     vfn(self.apps001, 0);
                 let k = CString::new(key).ok()?;
                 let mut buf = vec![0u8; 1024];
-                let n = f(self.apps001, app_id, k.as_ptr(), buf.as_mut_ptr() as *mut c_char, buf.len() as i32);
+                let n = f(
+                    self.apps001,
+                    app_id,
+                    k.as_ptr(),
+                    buf.as_mut_ptr() as *mut c_char,
+                    buf.len() as i32,
+                );
                 if n == 0 {
                     return None;
                 }
@@ -711,7 +935,11 @@ mod imp {
                 .map(|(id, kind)| OwnedGame {
                     app_id: *id,
                     name: self.app_data(*id, "name").unwrap_or_else(|| id.to_string()),
-                    kind: if kind.is_empty() { "normal".into() } else { kind.clone() },
+                    kind: if kind.is_empty() {
+                        "normal".into()
+                    } else {
+                        kind.clone()
+                    },
                 })
                 .collect()
         }
@@ -752,7 +980,12 @@ mod imp {
             };
             let start = Instant::now();
             loop {
-                let mut msg = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+                let mut msg = CallbackMsg {
+                    user: 0,
+                    id: 0,
+                    param: std::ptr::null_mut(),
+                    param_size: 0,
+                };
                 let mut call: i32 = 0;
                 if get_cb(self.pipe, &mut msg, &mut call) != 0 {
                     let hit = msg.id == callback_id;
@@ -785,11 +1018,16 @@ mod imp {
             // (still downloading) and GetNumAchievements is still 0. A SECOND callback
             // then arrives with k_EResultOK once the schema is loaded. So we must wait
             // for THIS app's UserStatsReceived with result OK — not just any callback.
-            let want_app: u32 = std::env::var("SteamAppId").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let want_app: u32 = std::env::var("SteamAppId")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
             let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
 
             let (Ok(get_cb), Ok(free_cb)) = (
-                self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>("Steam_BGetCallback"),
+                self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>(
+                    "Steam_BGetCallback",
+                ),
                 self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
             ) else {
                 // exports missing → fall back to the old single-callback wait
@@ -803,10 +1041,16 @@ mod imp {
             let start = Instant::now();
             loop {
                 let mut got_ok = false;
-                let mut msg = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+                let mut msg = CallbackMsg {
+                    user: 0,
+                    id: 0,
+                    param: std::ptr::null_mut(),
+                    param_size: 0,
+                };
                 let mut call: i32 = 0;
                 while get_cb(self.pipe, &mut msg, &mut call) != 0 {
-                    if msg.id == USER_STATS_RECEIVED && !msg.param.is_null() && msg.param_size >= 12 {
+                    if msg.id == USER_STATS_RECEIVED && !msg.param.is_null() && msg.param_size >= 12
+                    {
                         let game_id = *(msg.param as *const u64) as u32; // m_nGameID (low 32 = appId)
                         let result = *(msg.param.add(8) as *const i32); // m_eResult (k_EResultOK == 1)
                         if (want_app == 0 || game_id == want_app) && result == 1 {
@@ -832,8 +1076,11 @@ mod imp {
 
                 let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
                 let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
-                let get_disp: extern "C" fn(*mut c_void, *const c_char, *const c_char) -> *const c_char =
-                    vfn(stats, 11);
+                let get_disp: extern "C" fn(
+                    *mut c_void,
+                    *const c_char,
+                    *const c_char,
+                ) -> *const c_char = vfn(stats, 11);
                 let get_aut: extern "C" fn(*mut c_void, *const c_char, *mut u8, *mut u32) -> u8 =
                     vfn(stats, 8);
 
@@ -842,19 +1089,31 @@ mod imp {
                 // pump callbacks and poll GetAchievementAchievedPercent (vtable 36) on the
                 // first achievement until the data lands or we time out.
                 let req_global: extern "C" fn(*mut c_void) -> u64 = vfn(stats, 33);
-                let get_pct: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 36);
+                let get_pct: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 =
+                    vfn(stats, 36);
                 req_global(stats);
                 let mut have_global = false;
-                let probe_ptr = if num(stats) > 0 { get_name(stats, 0) } else { std::ptr::null() };
+                let probe_ptr = if num(stats) > 0 {
+                    get_name(stats, 0)
+                } else {
+                    std::ptr::null()
+                };
                 if !probe_ptr.is_null() {
                     if let Ok(probe) = CString::new(cstr(probe_ptr)) {
                         if let (Ok(get_cb), Ok(free_cb)) = (
-                            self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>("Steam_BGetCallback"),
+                            self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>(
+                                "Steam_BGetCallback",
+                            ),
                             self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
                         ) {
                             let start = Instant::now();
                             while start.elapsed() < Duration::from_secs(8) {
-                                let mut m = CallbackMsg { user: 0, id: 0, param: std::ptr::null_mut(), param_size: 0 };
+                                let mut m = CallbackMsg {
+                                    user: 0,
+                                    id: 0,
+                                    param: std::ptr::null_mut(),
+                                    param_size: 0,
+                                };
                                 let mut c: i32 = 0;
                                 while get_cb(self.pipe, &mut m, &mut c) != 0 {
                                     free_cb(self.pipe);
@@ -924,8 +1183,10 @@ mod imp {
                 }
 
                 // ---- statistics ----
-                let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 = vfn(stats, 1);
-                let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 0);
+                let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 =
+                    vfn(stats, 1);
+                let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 =
+                    vfn(stats, 0);
                 let mut stat_infos = Vec::new();
                 for d in self.read_stat_defs(app_id) {
                     let idc = match CString::new(d.id.clone()) {
@@ -957,7 +1218,9 @@ mod imp {
 
                 Ok(GameStats {
                     app_id,
-                    name: self.app_data(app_id, "name").unwrap_or_else(|| app_id.to_string()),
+                    name: self
+                        .app_data(app_id, "name")
+                        .unwrap_or_else(|| app_id.to_string()),
                     achievements,
                     stats: stat_infos,
                 })
@@ -1015,21 +1278,22 @@ mod imp {
 
                 if !stat_changes.is_empty() {
                     let defs = self.read_stat_defs(app_id);
-                    let floats: std::collections::HashSet<String> =
-                        defs.iter().filter(|d| d.is_float).map(|d| d.id.clone()).collect();
-                    let inc_only: std::collections::HashSet<String> =
-                        defs.iter().filter(|d| d.increment_only).map(|d| d.id.clone()).collect();
-                    let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 = vfn(stats, 1);
-                    let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 0);
+                    let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 =
+                        vfn(stats, 1);
+                    let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 =
+                        vfn(stats, 0);
                     for sc in stat_changes {
+                        let Some(def) = writable_stat_def(&defs, sc) else {
+                            continue;
+                        };
                         let idc = match CString::new(sc.id.clone()) {
                             Ok(c) => c,
                             Err(_) => continue,
                         };
                         // Never lower an increment-only stat (Steam/schema rule): read the
                         // current value and skip the write if this change would decrease it.
-                        if inc_only.contains(&sc.id) {
-                            let cur = if floats.contains(&sc.id) {
+                        if def.increment_only {
+                            let cur = if def.is_float {
                                 let mut v: f32 = 0.0;
                                 get_float(stats, idc.as_ptr(), &mut v);
                                 v as f64
@@ -1042,7 +1306,7 @@ mod imp {
                                 continue;
                             }
                         }
-                        let ok = if floats.contains(&sc.id) {
+                        let ok = if def.is_float {
                             set_float(stats, idc.as_ptr(), sc.value as f32)
                         } else {
                             set_int(stats, idc.as_ptr(), sc.value as i32)
@@ -1066,7 +1330,8 @@ mod imp {
                 let stats = self.prepare_stats()?;
                 let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
                 let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
-                let get_ach: extern "C" fn(*mut c_void, *const c_char, *mut u8) -> u8 = vfn(stats, 5);
+                let get_ach: extern "C" fn(*mut c_void, *const c_char, *mut u8) -> u8 =
+                    vfn(stats, 5);
                 let total = num(stats);
                 let mut earned = 0u32;
                 for i in 0..total {
@@ -1105,13 +1370,20 @@ mod imp {
         /// gate writes on protection must fail closed in that case rather than
         /// treat every achievement as unprotected.
         fn read_ach_perms(&self, app_id: u32) -> Option<std::collections::HashMap<String, i32>> {
-            let path = format!(r"{}\appcache\stats\UserGameStatsSchema_{}.bin", self.install, app_id);
+            let path = format!(
+                r"{}\appcache\stats\UserGameStatsSchema_{}.bin",
+                self.install, app_id
+            );
             let data = std::fs::read(&path).ok()?;
             let root = super::parse_kv(&data)?;
-            let stats = root.child(&app_id.to_string()).and_then(|a| a.child("stats"))?;
+            let stats = root
+                .child(&app_id.to_string())
+                .and_then(|a| a.child("stats"))?;
             let mut out = std::collections::HashMap::new();
             for group in &stats.children {
-                let Some(bits) = group.child("bits") else { continue };
+                let Some(bits) = group.child("bits") else {
+                    continue;
+                };
                 for bit in &bits.children {
                     if let Some(id) = bit.child("name").and_then(|n| n.as_str()) {
                         let perm = bit.child("permission").map(|p| p.as_int()).unwrap_or(0);
@@ -1124,7 +1396,10 @@ mod imp {
 
         /// Parse the local schema .bin for this game's int/float stat definitions.
         fn read_stat_defs(&self, app_id: u32) -> Vec<StatDef> {
-            let path = format!(r"{}\appcache\stats\UserGameStatsSchema_{}.bin", self.install, app_id);
+            let path = format!(
+                r"{}\appcache\stats\UserGameStatsSchema_{}.bin",
+                self.install, app_id
+            );
             let Ok(data) = std::fs::read(&path) else {
                 return Vec::new();
             };
@@ -1144,7 +1419,11 @@ mod imp {
                 if kind == 0 {
                     continue;
                 }
-                let id = stat.child("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                let id = stat
+                    .child("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if id.is_empty() {
                     continue;
                 }
@@ -1152,7 +1431,10 @@ mod imp {
                     name: resolve_display_name(stat, &lang, &id),
                     is_float: kind == 2,
                     permission: stat.child("permission").map(|p| p.as_int()).unwrap_or(0),
-                    increment_only: stat.child("incrementonly").map(|p| p.as_bool()).unwrap_or(false),
+                    increment_only: stat
+                        .child("incrementonly")
+                        .map(|p| p.as_bool())
+                        .unwrap_or(false),
                     id,
                 });
             }
