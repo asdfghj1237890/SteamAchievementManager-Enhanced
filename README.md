@@ -2,7 +2,7 @@
 
 [![License: zlib](https://img.shields.io/badge/License-zlib-blue.svg)](LICENSE.txt)
 ![Desktop: Windows](https://img.shields.io/badge/desktop-Windows-0078D6?logo=windows&logoColor=white)
-![Desktop: macOS](https://img.shields.io/badge/desktop-macOS_Apple_Silicon-555555?logo=apple&logoColor=white)
+![Desktop: macOS](https://img.shields.io/badge/desktop-macOS_Apple_Silicon-000000?logo=apple&logoColor=white)
 ![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
 ![Vite 5](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
 ![TypeScript 5](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
