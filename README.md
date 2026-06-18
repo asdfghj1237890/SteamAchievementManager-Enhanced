@@ -10,6 +10,10 @@
 ![Rust](https://img.shields.io/badge/Rust-stable-CE422B?logo=rust&logoColor=white)
 ![i18n: 10 languages](https://img.shields.io/badge/i18n-10_languages-success)
 
+<p align="center">
+  <img src="docs/screenshots/legend-screen.jpg" alt="Steam Achievement Manager — Enhanced: the Library screen, a grid of games with real Steam cover art and per-game completion progress" width="900">
+</p>
+
 An enhanced fork of [gibbed's **Steam Achievement Manager (SAM)**](https://github.com/gibbed/SteamAchievementManager) that adds a **modern desktop app** — a full UI redesign built with React + Vite + TypeScript and a native **Tauri + Rust** shell — while keeping the original C# SAM intact in this repository.
 
 Like the original, it reads and writes Steam achievements and statistics through the **internal `steamclient.dll` interfaces** (not the public Web API / Steamworks SDK), so it operates against your local, logged-in Steam client.
