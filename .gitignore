@@ -408,3 +408,6 @@ docs/superpowers/
 
 # Local-only working notes (Claude Code) — personal scratch, not shared.
 CLAUDE.local.md
+
+# macOS Finder metadata
+.DS_Store
