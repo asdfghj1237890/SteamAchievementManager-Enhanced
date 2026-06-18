@@ -3,6 +3,15 @@
 
 * {
   box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Editable fields keep text selection so users can still edit/clear them */
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 body {

@@ -19,8 +19,8 @@ export default function Statistics() {
   }
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '14px 22px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', flex: '0 0 auto' }}>
+    <>
+      <div style={{ padding: '14px 22px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', position: 'sticky', top: 'var(--tabbar-h, 40px)', zIndex: 4, background: 'var(--s0)' }}>
         <button onClick={() => set((s) => ({ statsEditing: !s.statsEditing }))} style={editToggleStyle}>
           {state.statsEditing ? '✓ ' + t('stats.editOn') : t('stats.editOff')}
         </button>
@@ -33,7 +33,7 @@ export default function Statistics() {
         </button>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px 22px', minHeight: 0 }}>
+      <div style={{ padding: '0 22px 22px' }}>
         <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--s2)' }}>
           <div
             style={{
@@ -106,6 +106,6 @@ export default function Statistics() {
           {t('stats.footer')}
         </p>
       </div>
-    </div>
+    </>
   )
 }

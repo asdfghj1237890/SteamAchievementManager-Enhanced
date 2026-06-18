@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, type CSSProperties } from 'react'
 import { Navigate, Outlet, useParams } from 'react-router-dom'
 import { useApp } from '../state/AppContext'
 import GameHeader from './GameHeader'
@@ -28,10 +28,13 @@ export default function GameScreen() {
     return <LoadingPane label={t('game.loading')} />
   }
 
+  // One scroll container for the whole game screen: the hero banner scrolls away while
+  // the tab bar (and each tab's toolbar) stay pinned via position:sticky. --tabbar-h is
+  // the pinned tab-bar height, reused as the toolbar's sticky offset.
   return (
-    <>
+    <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, '--tabbar-h': '40px' } as CSSProperties}>
       <GameHeader />
       <Outlet />
-    </>
+    </div>
   )
 }

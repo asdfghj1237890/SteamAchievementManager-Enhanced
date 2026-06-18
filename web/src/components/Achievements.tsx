@@ -44,9 +44,9 @@ export default function Achievements() {
   }
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* toolbar */}
-      <div style={{ padding: '14px 22px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', flex: '0 0 auto' }}>
+    <>
+      {/* toolbar — pinned just below the sticky tab bar */}
+      <div style={{ padding: '14px 22px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', position: 'sticky', top: 'var(--tabbar-h, 40px)', zIndex: 4, background: 'var(--s0)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 11px', borderRadius: 'var(--radius)', background: 'var(--s2)', border: '1px solid var(--bd)', minWidth: '180px' }}>
           <span style={{ color: 'var(--t3)', fontSize: '13px' }}>⌕</span>
           <input
@@ -104,7 +104,7 @@ export default function Achievements() {
       </div>
 
       {/* content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px 22px', minHeight: 0 }}>
+      <div style={{ padding: '0 22px 22px' }}>
         {state.view === 'grid' && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(var(--cardmin,224px),1fr))', gap: 'var(--gap,12px)' }}>
             {views.map((ach) => (
@@ -121,7 +121,7 @@ export default function Achievements() {
                     {ach.check}
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: 'auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 8px', marginTop: 'auto' }}>
                   <span style={ach.stateStyle}>{ach.stateText}</span>
                   {ach.showBadge && <span style={ach.badgeStyle}>{ach.badgeText}</span>}
                   <span style={{ marginLeft: 'auto', flex: '0 0 auto', whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)' }}>{ach.rarityText}</span>
@@ -140,7 +140,7 @@ export default function Achievements() {
                   <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ach.name}</div>
                   <div style={{ fontSize: '11.5px', color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ach.desc}</div>
                 </div>
-                <span style={{ fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)', width: '78px', textAlign: 'right', flex: '0 0 auto', whiteSpace: 'nowrap' }}>{ach.rarityText}</span>
+                <span style={{ fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)', minWidth: '78px', textAlign: 'right', flex: '0 0 auto', whiteSpace: 'nowrap' }}>{ach.rarityText}</span>
                 <span style={ach.stateStyle}>{ach.stateText}</span>
               </div>
             ))}
@@ -156,6 +156,6 @@ export default function Achievements() {
           {t('ach.showing', { n: filtered.length, total })}
         </div>
       </div>
-    </div>
+    </>
   )
 }
