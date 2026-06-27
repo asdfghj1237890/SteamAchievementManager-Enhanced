@@ -74,7 +74,9 @@ fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, St
     });
     if let Some(data) = stdin_data {
         let mut stdin = child.stdin.take().ok_or("worker stdin 無法取得")?;
-        stdin.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        stdin
+            .write_all(data.as_bytes())
+            .map_err(|e| e.to_string())?;
         // stdin dropped here → closes the pipe so the worker's read sees EOF
     }
     let start = Instant::now();
@@ -97,7 +99,11 @@ fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, St
         Ok(String::from_utf8_lossy(&stdout).trim().to_string())
     } else {
         let err = String::from_utf8_lossy(&stderr).trim().to_string();
-        Err(if err.is_empty() { "worker 失敗".into() } else { err })
+        Err(if err.is_empty() {
+            "worker 失敗".into()
+        } else {
+            err
+        })
     }
 }
 

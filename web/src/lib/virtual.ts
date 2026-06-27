@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-interface Metrics {
+export interface VirtualMetrics {
   scrollTop: number
   viewportHeight: number
   viewportWidth: number
@@ -63,7 +63,7 @@ export function virtualGridRange(
 
 export function useVirtualScroll() {
   const [node, setNode] = useState<HTMLDivElement | null>(null)
-  const [metrics, setMetrics] = useState<Metrics>({ scrollTop: 0, viewportHeight: 0, viewportWidth: 0 })
+  const [metrics, setMetrics] = useState<VirtualMetrics>({ scrollTop: 0, viewportHeight: 0, viewportWidth: 0 })
 
   const readMetrics = useCallback((el: HTMLDivElement) => {
     setMetrics({
@@ -92,7 +92,7 @@ export function useVirtualScroll() {
 
   const onScroll = useCallback(() => updateMetrics(), [updateMetrics])
   return useMemo(
-    () => ({ containerRef, metrics, onScroll, updateMetrics }),
-    [containerRef, metrics, onScroll, updateMetrics],
+    () => ({ containerRef, metrics, node, onScroll, updateMetrics }),
+    [containerRef, metrics, node, onScroll, updateMetrics],
   )
 }

@@ -1,12 +1,15 @@
 import { useEffect, type CSSProperties } from 'react'
 import { Navigate, Outlet, useParams } from 'react-router-dom'
 import { useApp } from '../state/AppContext'
+import { useVirtualScroll } from '../lib/virtual'
+import { GameScrollProvider } from './GameScroll'
 import GameHeader from './GameHeader'
 import { ErrorPane, LoadingPane } from './Panes'
 
 export default function GameScreen() {
   const { appId } = useParams()
   const { openGame, state, games, t } = useApp()
+  const scroll = useVirtualScroll()
 
   useEffect(() => {
     if (appId) openGame(appId)
@@ -32,9 +35,15 @@ export default function GameScreen() {
   // the tab bar (and each tab's toolbar) stay pinned via position:sticky. --tabbar-h is
   // the pinned tab-bar height, reused as the toolbar's sticky offset.
   return (
-    <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, '--tabbar-h': '40px' } as CSSProperties}>
-      <GameHeader />
-      <Outlet />
-    </div>
+    <GameScrollProvider value={scroll}>
+      <div
+        ref={scroll.containerRef}
+        onScroll={scroll.onScroll}
+        style={{ flex: 1, overflowY: 'auto', minHeight: 0, '--tabbar-h': '40px' } as CSSProperties}
+      >
+        <GameHeader />
+        <Outlet />
+      </div>
+    </GameScrollProvider>
   )
 }

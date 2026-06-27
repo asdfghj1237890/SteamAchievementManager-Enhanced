@@ -10,17 +10,26 @@ import {
 // known-no-cover. Namespacing by variant keeps a capsule-cached header from pre-empting
 // the hero variant's library_hero attempt.
 const CACHE_KEY = 'sam-header-cache-v1'
+const COVER_CACHE_MAX = 1000
 const cache = new Map<string, string>(
   (() => {
     try {
-      return Object.entries(JSON.parse(localStorage.getItem(CACHE_KEY) || '{}')) as [string, string][]
+      return (Object.entries(JSON.parse(localStorage.getItem(CACHE_KEY) || '{}')) as [string, string][])
+        .slice(-COVER_CACHE_MAX)
     } catch {
       return []
     }
   })(),
 )
 const remember = (appId: string, variant: CoverVariant, url: string) => {
-  cache.set(coverKey(appId, variant), url)
+  const key = coverKey(appId, variant)
+  cache.delete(key)
+  cache.set(key, url)
+  while (cache.size > COVER_CACHE_MAX) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(Object.fromEntries(cache)))
   } catch {

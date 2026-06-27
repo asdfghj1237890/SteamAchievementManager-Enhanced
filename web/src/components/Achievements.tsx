@@ -1,9 +1,11 @@
-import type { CSSProperties } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { useApp } from '../state/AppContext'
 import { completion, filteredAch, pendingCount, type BulkMode } from '../lib/achievements'
 import { enrichAchievement } from '../lib/achievementView'
+import { virtualGridRange, virtualRange } from '../lib/virtual'
 import type { I18nKey } from '../i18n'
 import type { AchFilter, AchSort, ViewMode } from '../types'
+import { useGameScroll } from './GameScroll'
 import Seg from './ui/Seg'
 import AchIcon from './ui/AchIcon'
 
@@ -13,16 +15,50 @@ const SORT_OPTS: [AchSort, I18nKey][] = [
   ['default', 'sort.default'], ['rarity', 'sort.rarity'], ['common', 'sort.common'],
   ['name', 'sort.name'], ['unlock', 'sort.unlock'],
 ]
+const CONTENT_X_PADDING = 44
+const GRID_MIN_WIDTH = 224
+const GRID_CARD_HEIGHT = 158
+const GRID_GAP = 12
+const LIST_ROW_HEIGHT = 64
 
 export default function Achievements() {
   const { state, t, activeGame: g, set, bulk, store, toggleAch } = useApp()
-  if (!g) return null
+  const scroll = useGameScroll()
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const [contentTop, setContentTop] = useState(0)
 
-  const { total } = completion(g, state.achState)
-  const filtered = filteredAch(g, state.achState, state.origAch, state.filter, state.achSearch, state.sort)
-  const savedMap = state.origAch[g.id] ?? {}
-  const views = filtered.map((a) => enrichAchievement(g, a, t, !!savedMap[a.id]))
-  const pending = pendingCount(g, state.achState, state.origAch, state.statState, state.origStat)
+  const { total } = g ? completion(g, state.achState) : { total: 0 }
+  const filtered = g ? filteredAch(g, state.achState, state.origAch, state.filter, state.achSearch, state.sort) : []
+  const savedMap = g ? state.origAch[g.id] ?? {} : {}
+  const pending = g ? pendingCount(g, state.achState, state.origAch, state.statState, state.origStat) : 0
+
+  useLayoutEffect(() => {
+    if (!g || !scroll.node || !contentRef.current) return
+    const containerRect = scroll.node.getBoundingClientRect()
+    const contentRect = contentRef.current.getBoundingClientRect()
+    const next = contentRect.top - containerRect.top + scroll.node.scrollTop
+    setContentTop((prev) => (Math.abs(prev - next) > 0.5 ? next : prev))
+  }, [g, scroll.node, scroll.metrics.viewportWidth, state.view, filtered.length])
+
+  const localScrollTop = Math.max(0, scroll.metrics.scrollTop - contentTop)
+  const viewportHeight = scroll.metrics.viewportHeight
+  const contentWidth = Math.max(0, scroll.metrics.viewportWidth - CONTENT_X_PADDING)
+  const grid = virtualGridRange(
+    filtered.length,
+    contentWidth,
+    GRID_MIN_WIDTH,
+    GRID_CARD_HEIGHT,
+    GRID_GAP,
+    viewportHeight,
+    localScrollTop,
+    3,
+  )
+  const rows = virtualRange(filtered.length, LIST_ROW_HEIGHT, viewportHeight, localScrollTop, 8)
+  const range = state.view === 'grid' ? grid : rows
+  const visibleAchievements = filtered.slice(range.start, range.end)
+  const views = g ? visibleAchievements.map((a) => enrichAchievement(g, a, t, !!savedMap[a.id])) : []
+
+  if (!g) return null
 
   // Counts reflect the SAVED partition, matching what each filter actually shows.
   const savedUnlockedCount = g.achievements.reduce(
@@ -104,46 +140,69 @@ export default function Achievements() {
       </div>
 
       {/* content */}
-      <div style={{ padding: '0 22px 22px' }}>
+      <div ref={contentRef} style={{ padding: '0 22px 22px' }}>
         {state.view === 'grid' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(var(--cardmin,224px),1fr))', gap: 'var(--gap,12px)' }}>
-            {views.map((ach) => (
-              <div key={ach.id} style={ach.cardStyle}>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                  <AchIcon url={ach.iconUrl} style={ach.iconGrid} letter={ach.icon} />
-                  <div style={{ flex: 1, minWidth: 0, paddingTop: '1px' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--t1)', lineHeight: 1.25 }}>{ach.name}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--t2)', marginTop: '4px', lineHeight: 1.4, textWrap: 'pretty' } as CSSProperties}>
-                      {ach.desc}
+          <div style={{ height: grid.totalHeight, position: 'relative' }}>
+            <div
+              style={{
+                position: 'absolute', top: 0, left: 0, right: 0,
+                transform: `translateY(${grid.offsetY}px)`,
+                display: 'grid',
+                gridTemplateColumns: `repeat(${grid.columns}, minmax(0, 1fr))`,
+                gap: GRID_GAP,
+              }}
+            >
+              {views.map((ach) => (
+                <div key={ach.id} style={{ ...ach.cardStyle, height: GRID_CARD_HEIGHT, boxSizing: 'border-box', overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                    <AchIcon url={ach.iconUrl} style={ach.iconGrid} letter={ach.icon} />
+                    <div style={{ flex: 1, minWidth: 0, paddingTop: '1px' }}>
+                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--t1)', lineHeight: 1.25 }}>{ach.name}</div>
+                      <div
+                        style={{
+                          fontSize: '12px', color: 'var(--t2)', marginTop: '4px', lineHeight: 1.4,
+                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden', textWrap: 'pretty',
+                        } as CSSProperties}
+                      >
+                        {ach.desc}
+                      </div>
+                    </div>
+                    <div style={ach.checkStyle} onClick={() => toggleAch(g.id, ach.id, ach.protected)}>
+                      {ach.check}
                     </div>
                   </div>
-                  <div style={ach.checkStyle} onClick={() => toggleAch(g.id, ach.id, ach.protected)}>
-                    {ach.check}
+                  <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 8px', marginTop: 'auto' }}>
+                    <span style={ach.stateStyle}>{ach.stateText}</span>
+                    {ach.showBadge && <span style={ach.badgeStyle}>{ach.badgeText}</span>}
+                    <span style={{ marginLeft: 'auto', flex: '0 0 auto', whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)' }}>{ach.rarityText}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 8px', marginTop: 'auto' }}>
-                  <span style={ach.stateStyle}>{ach.stateText}</span>
-                  {ach.showBadge && <span style={ach.badgeStyle}>{ach.badgeText}</span>}
-                  <span style={{ marginLeft: 'auto', flex: '0 0 auto', whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)' }}>{ach.rarityText}</span>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
         {state.view === 'list' && (
-          <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--s2)' }}>
-            {views.map((ach) => (
-              <div key={ach.id} style={ach.rowStyle} onClick={() => toggleAch(g.id, ach.id, ach.protected)}>
-                <div style={ach.checkStyle}>{ach.check}</div>
-                <AchIcon url={ach.iconUrl} style={ach.iconList} letter={ach.icon} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ach.name}</div>
-                  <div style={{ fontSize: '11.5px', color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ach.desc}</div>
+          <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--s2)', height: rows.totalHeight, position: 'relative' }}>
+            <div
+              style={{
+                position: 'absolute', left: 0, right: 0, top: 0,
+                transform: `translateY(${rows.offsetY}px)`,
+              }}
+            >
+              {views.map((ach) => (
+                <div key={ach.id} style={{ ...ach.rowStyle, height: LIST_ROW_HEIGHT, boxSizing: 'border-box' }} onClick={() => toggleAch(g.id, ach.id, ach.protected)}>
+                  <div style={ach.checkStyle}>{ach.check}</div>
+                  <AchIcon url={ach.iconUrl} style={ach.iconList} letter={ach.icon} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ach.name}</div>
+                    <div style={{ fontSize: '11.5px', color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ach.desc}</div>
+                  </div>
+                  <span style={{ fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)', minWidth: '78px', textAlign: 'right', flex: '0 0 auto', whiteSpace: 'nowrap' }}>{ach.rarityText}</span>
+                  <span style={ach.stateStyle}>{ach.stateText}</span>
                 </div>
-                <span style={{ fontSize: '11px', color: 'var(--t3)', fontFamily: 'var(--meta)', minWidth: '78px', textAlign: 'right', flex: '0 0 auto', whiteSpace: 'nowrap' }}>{ach.rarityText}</span>
-                <span style={ach.stateStyle}>{ach.stateText}</span>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
         {filtered.length === 0 && (

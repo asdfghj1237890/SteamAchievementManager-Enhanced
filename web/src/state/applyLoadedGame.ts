@@ -1,6 +1,7 @@
 import { completionFlat } from '../lib/achievements'
 import type { Game } from '../types'
 import type { AppState } from './store'
+import { touchDetailCache } from './detailCache'
 
 /**
  * Merge a freshly-loaded game's detail into app state.
@@ -40,5 +41,6 @@ export function applyLoadedGame(state: AppState, appId: string, game: Game): Par
     patch.detailError = null
   }
 
-  return patch
+  const merged = { ...state, ...patch }
+  return { ...patch, ...touchDetailCache(merged, appId) }
 }

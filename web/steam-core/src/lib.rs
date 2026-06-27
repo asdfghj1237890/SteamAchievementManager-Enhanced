@@ -586,8 +586,8 @@ mod tests {
 #[cfg(windows)]
 mod imp {
     use super::{
-        choose_account_id_with_preferred, parse_most_recent_account_id, stat_bound,
-        stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid, text_vdf_tokens,
+        choose_account_id_with_preferred, parse_most_recent_account_id, stat_bound, stat_i32_value,
+        stat_max_default, stat_min_default, stat_value_is_valid, text_vdf_tokens,
         writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatDef,
         StatInfo,
     };

@@ -4,7 +4,10 @@
 //!   cargo run --bin probe <appId> [appId...]   # check specific app ids (fast)
 //!   cargo run --bin probe                        # full library scan via SAM list
 fn main() {
-    let ids: Vec<u32> = std::env::args().skip(1).filter_map(|a| a.parse().ok()).collect();
+    let ids: Vec<u32> = std::env::args()
+        .skip(1)
+        .filter_map(|a| a.parse().ok())
+        .collect();
 
     if ids.is_empty() {
         // Full library scan (downloads the SAM master list, then ownership-checks each).

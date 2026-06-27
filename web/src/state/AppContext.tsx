@@ -10,6 +10,7 @@ import type { GameChanges } from '../data/source'
 import { reducer, makeInitialState, type Action, type AppState } from './store'
 import { applyLoadedGame } from './applyLoadedGame'
 import { applyPartialSave } from './applyPartialSave'
+import { touchDetailCache } from './detailCache'
 import { appIdKey, mergeFreshGames } from './gameListMerge'
 import { getVersion } from '@tauri-apps/api/app'
 import { fetchLatestVersion, openReleasesPage } from '../data/update'
@@ -306,9 +307,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const s = stateRef.current
       const loaded = s.loaded[appId]
       if (loaded) {
-        if (s.activeAppId !== appId || s.detailStatus !== 'ready') {
-          dispatch({ activeAppId: appId, detailStatus: 'ready', detailError: null })
-        }
+        dispatch((cur) => {
+          const patch: Partial<AppState> = { activeAppId: appId, detailStatus: 'ready', detailError: null }
+          return { ...patch, ...touchDetailCache({ ...cur, ...patch }, appId) }
+        })
         if (pendingCount(loaded, s.achState, s.origAch, s.statState, s.origStat) === 0) {
           reloadGame(appId, 'silent')
         }

@@ -46,6 +46,8 @@ export interface AppState {
   detailStatus: LoadStatus
   detailError: string | null
   loaded: Record<string, Game>
+  /** Least-recently used order for loaded game detail caches. */
+  detailOrder: string[]
   achState: AchState
   statState: StatState
   /** Last-saved snapshots used to compute pending changes. */
@@ -107,6 +109,7 @@ export function makeInitialState(): AppState {
     detailStatus: 'idle',
     detailError: null,
     loaded: {},
+    detailOrder: [],
     achState: {},
     statState: {},
     origAch: {},

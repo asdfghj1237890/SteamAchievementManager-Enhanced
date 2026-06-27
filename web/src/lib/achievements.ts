@@ -3,7 +3,10 @@ import type { Achievement, AchFilter, AchSort, AchState, Game, StatState } from 
 /** Apply the live unlock overrides on top of a game's base achievements. */
 export const workingAch = (g: Game, achState: AchState): Achievement[] => {
   const w = achState[g.id] ?? {}
-  return g.achievements.map((a) => ({ ...a, unlocked: !!w[a.id] }))
+  return g.achievements.map((a) => {
+    const unlocked = !!w[a.id]
+    return a.unlocked === unlocked ? a : { ...a, unlocked }
+  })
 }
 
 /** Reorder a list by the chosen key (returns a new array; 'default' keeps order). */
@@ -40,7 +43,10 @@ export const filteredAch = (
       if (q && a.name.toLowerCase().indexOf(q) < 0 && a.desc.toLowerCase().indexOf(q) < 0) return false
       return true
     })
-    .map((a) => ({ ...a, unlocked: !!w[a.id] }))
+    .map((a) => {
+      const unlocked = !!w[a.id]
+      return a.unlocked === unlocked ? a : { ...a, unlocked }
+    })
   return sortAch(list, sort)
 }
 
@@ -74,9 +80,9 @@ export interface Completion {
 
 /** Earned / total / percentage for a game under the current unlock state. */
 export const completion = (g: Game, achState: AchState): Completion => {
-  const w = workingAch(g, achState)
-  const earned = w.filter((a) => a.unlocked).length
-  const total = w.length
+  const w = achState[g.id] ?? {}
+  const earned = g.achievements.reduce((n, a) => n + (w[a.id] ? 1 : 0), 0)
+  const total = g.achievements.length
   const pct = total ? Math.round((earned / total) * 100) : 0
   return { earned, total, pct }
 }
@@ -93,10 +99,10 @@ export const completionFlat = (
 
 /** Points earned / total for a game (used in the detail banner). */
 export const points = (g: Game, achState: AchState): { earned: number; total: number } => {
-  const w = workingAch(g, achState)
+  const w = achState[g.id] ?? {}
   return {
-    earned: w.filter((a) => a.unlocked).reduce((s, a) => s + a.points, 0),
-    total: w.reduce((s, a) => s + a.points, 0),
+    earned: g.achievements.reduce((s, a) => s + (w[a.id] ? a.points : 0), 0),
+    total: g.achievements.reduce((s, a) => s + a.points, 0),
   }
 }
 
