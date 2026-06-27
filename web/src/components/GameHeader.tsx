@@ -59,6 +59,7 @@ export default function GameHeader() {
               src={heroSrc}
               alt=""
               draggable={false}
+              decoding="async"
               onLoad={() => setHeroLoaded(true)}
               onError={onHeroError}
               style={{

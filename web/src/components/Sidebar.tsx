@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useApp } from '../state/AppContext'
 import { visibleSummaries } from '../lib/library'
+import { useVirtualScroll, virtualRange } from '../lib/virtual'
 import type { I18nKey } from '../i18n'
 import type { GameSummary, TypeFilter } from '../types'
 import Seg from './ui/Seg'
@@ -13,6 +14,9 @@ const TYPE_CHIPS: [TypeFilter, I18nKey][] = [
 
 // Sentinel category-filter value for "in no category".
 const UNCATEGORIZED = '__sam_uncategorized__'
+const ROW_ITEM_HEIGHT = 55
+const ROW_GAP = 3
+const ROW_HEIGHT = ROW_ITEM_HEIGHT + ROW_GAP
 
 function sidebarCover(hue: number): string {
   return (
@@ -46,6 +50,9 @@ export default function Sidebar() {
       : state.categoryFilter === UNCATEGORIZED
         ? visible.filter((g) => (state.categories[g.appId] ?? []).length === 0)
         : visible.filter((g) => (state.categories[g.appId] ?? []).includes(state.categoryFilter))
+  const virtual = useVirtualScroll()
+  const rows = virtualRange(shown.length, ROW_HEIGHT, virtual.metrics.viewportHeight, virtual.metrics.scrollTop, 8)
+  const visibleRows = shown.slice(rows.start, rows.end)
 
   const inputBase: CSSProperties = {
     flex: 1, border: 'none', background: 'transparent', color: 'var(--t1)', fontSize: '13px',
@@ -77,7 +84,7 @@ export default function Sidebar() {
     const pct = c?.pct ?? 0
     const rowStyle: CSSProperties = {
       display: 'flex', alignItems: 'center', gap: '11px', padding: '9px 10px', borderRadius: 'var(--radius)',
-      cursor: 'pointer',
+      cursor: 'pointer', height: ROW_ITEM_HEIGHT, boxSizing: 'border-box',
       border: '1px solid ' + (selected ? 'color-mix(in srgb, var(--accent) 45%, var(--bd))' : 'transparent'),
       background: selected ? 'color-mix(in srgb, var(--accent) 13%, transparent)' : 'transparent',
       transition: 'background .15s',
@@ -185,14 +192,30 @@ export default function Sidebar() {
         )}
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px', display: 'flex', flexDirection: 'column', gap: '3px', minHeight: 0 }}>
+      <div
+        ref={virtual.containerRef}
+        onScroll={virtual.onScroll}
+        style={{ flex: 1, overflowY: 'auto', padding: '8px', minHeight: 0 }}
+      >
         {state.gamesStatus === 'loading' && (
           <div style={{ padding: '16px 10px', fontSize: '12px', color: 'var(--t3)', fontFamily: 'var(--meta)' }}>{t('sidebar.loadingList')}</div>
         )}
         {state.gamesStatus === 'error' && (
           <div style={{ padding: '16px 10px', fontSize: '12px', color: 'var(--danger)' }}>{t('sidebar.listError')}</div>
         )}
-        {shown.map(row)}
+        {shown.length > 0 && (
+          <div style={{ height: rows.totalHeight, position: 'relative' }}>
+            <div
+              style={{
+                position: 'absolute', left: 0, right: 0, top: 0,
+                transform: `translateY(${rows.offsetY}px)`,
+                display: 'flex', flexDirection: 'column', gap: ROW_GAP,
+              }}
+            >
+              {visibleRows.map(row)}
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ padding: '11px 14px', borderTop: '1px solid var(--bds)', display: 'flex', flexDirection: 'column', gap: '8px' }}>

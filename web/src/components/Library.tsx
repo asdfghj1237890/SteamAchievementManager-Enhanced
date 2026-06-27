@@ -3,9 +3,15 @@ import { useApp } from '../state/AppContext'
 import { averagePct, visibleSummaries } from '../lib/library'
 import { coverGradient } from '../lib/styles'
 import { useHover } from '../lib/useHover'
+import { useVirtualScroll, virtualGridRange } from '../lib/virtual'
 import type { GameSummary } from '../types'
 import { ErrorPane, LoadingPane } from './Panes'
 import Cover from './ui/Cover'
+
+const CARD_MIN_WIDTH = 232
+const CARD_HEIGHT = 214
+const GRID_GAP = 16
+const HORIZONTAL_PADDING = 48
 
 function LibraryCard({ g }: { g: GameSummary }) {
   const { t, selectGame, completionFor } = useApp()
@@ -18,6 +24,7 @@ function LibraryCard({ g }: { g: GameSummary }) {
     border: '1px solid ' + (hover ? 'color-mix(in srgb, var(--accent) 42%, var(--bd))' : 'var(--bd)'),
     background: 'var(--s2)', cursor: 'pointer', boxShadow: 'var(--elev)',
     transition: 'border-color .15s, transform .15s', transform: hover ? 'translateY(-2px)' : 'none',
+    height: CARD_HEIGHT, boxSizing: 'border-box',
   }
   const capsuleStyle: CSSProperties = {
     height: '108px', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -60,6 +67,7 @@ function LibraryCard({ g }: { g: GameSummary }) {
 
 export default function Library() {
   const { games, state, t } = useApp()
+  const virtual = useVirtualScroll()
 
   if (state.gamesStatus === 'loading' || state.gamesStatus === 'idle') {
     return <LoadingPane label={t('lib.loading')} />
@@ -70,9 +78,24 @@ export default function Library() {
 
   const visible = visibleSummaries(games, state.typeFilter, state.gameSearch)
   const libAvg = averagePct(visible)
+  const grid = virtualGridRange(
+    visible.length,
+    Math.max(0, virtual.metrics.viewportWidth - HORIZONTAL_PADDING),
+    CARD_MIN_WIDTH,
+    CARD_HEIGHT,
+    GRID_GAP,
+    virtual.metrics.viewportHeight,
+    virtual.metrics.scrollTop,
+    3,
+  )
+  const visibleCards = visible.slice(grid.start, grid.end)
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '22px 24px 26px', minHeight: 0 }}>
+    <div
+      ref={virtual.containerRef}
+      onScroll={virtual.onScroll}
+      style={{ flex: 1, overflowY: 'auto', padding: '22px 24px 26px', minHeight: 0 }}
+    >
       <div style={{ marginBottom: '18px' }}>
         <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, letterSpacing: '-.3px', color: 'var(--t1)' }}>{t('nav.library')}</h2>
         <p style={{ margin: '6px 0 0', fontSize: '13px', color: 'var(--t2)' }}>
@@ -80,10 +103,20 @@ export default function Library() {
         </p>
       </div>
       {visible.length > 0 ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(232px,1fr))', gap: '16px' }}>
-          {visible.map((g) => (
-            <LibraryCard key={g.id} g={g} />
-          ))}
+        <div style={{ height: grid.totalHeight, position: 'relative' }}>
+          <div
+            style={{
+              position: 'absolute', top: 0, left: 0, right: 0,
+              transform: `translateY(${grid.offsetY}px)`,
+              display: 'grid',
+              gridTemplateColumns: `repeat(auto-fill,minmax(${CARD_MIN_WIDTH}px,1fr))`,
+              gap: GRID_GAP,
+            }}
+          >
+            {visibleCards.map((g) => (
+              <LibraryCard key={g.id} g={g} />
+            ))}
+          </div>
         </div>
       ) : (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--t3)' }}>

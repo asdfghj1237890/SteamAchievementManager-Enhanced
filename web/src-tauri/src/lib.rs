@@ -1,6 +1,21 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::process::Command;
+use std::time::{Duration, Instant};
 use steam_core::{AchChange, OwnedGame, StatChange};
+
+const WORKER_TIMEOUT_SECS: u64 = 45;
+
+fn join_pipe_reader(
+    reader: Option<std::thread::JoinHandle<Result<Vec<u8>, String>>>,
+) -> Result<Vec<u8>, String> {
+    match reader {
+        Some(reader) => reader
+            .join()
+            .map_err(|_| "worker output reader panic".to_string())?,
+        None => Ok(Vec::new()),
+    }
+}
 
 // ---------- list owned games (read-only, in-process) ----------
 #[tauri::command]
@@ -41,17 +56,47 @@ fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, St
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("無法啟動 worker：{e}"))?;
+    let stdout_reader = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut stdout = Vec::new();
+            out.read_to_end(&mut stdout)
+                .map(|_| stdout)
+                .map_err(|e| e.to_string())
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut stderr = Vec::new();
+            err.read_to_end(&mut stderr)
+                .map(|_| stderr)
+                .map_err(|e| e.to_string())
+        })
+    });
     if let Some(data) = stdin_data {
-        use std::io::Write;
         let mut stdin = child.stdin.take().ok_or("worker stdin 無法取得")?;
         stdin.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
         // stdin dropped here → closes the pipe so the worker's read sees EOF
     }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(WORKER_TIMEOUT_SECS) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("worker 逾時（超過 {WORKER_TIMEOUT_SECS} 秒）"));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    let stdout = join_pipe_reader(stdout_reader)?;
+    let stderr = join_pipe_reader(stderr_reader)?;
+
+    if status.success() {
+        Ok(String::from_utf8_lossy(&stdout).trim().to_string())
     } else {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let err = String::from_utf8_lossy(&stderr).trim().to_string();
         Err(if err.is_empty() { "worker 失敗".into() } else { err })
     }
 }

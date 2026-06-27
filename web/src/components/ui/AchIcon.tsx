@@ -20,6 +20,8 @@ export default function AchIcon({
           src={url}
           alt=""
           draggable={false}
+          loading="lazy"
+          decoding="async"
           onLoad={() => setLoaded(true)}
           onError={() => setLoaded(false)}
           style={{

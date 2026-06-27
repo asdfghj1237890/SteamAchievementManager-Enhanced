@@ -136,12 +136,71 @@ struct StatDef {
     is_float: bool,
     permission: i32,
     increment_only: bool,
+    min_value: f64,
+    max_value: f64,
+    max_change: f64,
 }
 
 fn writable_stat_def<'a>(defs: &'a [StatDef], change: &StatChange) -> Option<&'a StatDef> {
     defs.iter()
         .find(|d| d.id == change.id)
         .filter(|d| (d.permission & 2) == 0)
+}
+
+fn stat_min_default(is_float: bool) -> f64 {
+    if is_float {
+        f32::MIN as f64
+    } else {
+        i32::MIN as f64
+    }
+}
+
+fn stat_max_default(is_float: bool) -> f64 {
+    if is_float {
+        f32::MAX as f64
+    } else {
+        i32::MAX as f64
+    }
+}
+
+fn stat_bound(stat: &Kv, key: &str, default: f64) -> f64 {
+    let value = stat.child(key).map(Kv::as_float).unwrap_or(default);
+    if value.is_finite() {
+        value
+    } else {
+        default
+    }
+}
+
+fn stat_i32_value(change: &StatChange) -> Option<i32> {
+    let value = change.value;
+    if !value.is_finite() || value.fract() != 0.0 {
+        return None;
+    }
+    if value < i32::MIN as f64 || value > i32::MAX as f64 {
+        return None;
+    }
+    Some(value as i32)
+}
+
+fn stat_value_is_valid(def: &StatDef, change: &StatChange, current: f64) -> bool {
+    let value = change.value;
+    if !value.is_finite() || !current.is_finite() {
+        return false;
+    }
+    if !def.is_float && stat_i32_value(change).is_none() {
+        return false;
+    }
+    if def.is_float && (value < f32::MIN as f64 || value > f32::MAX as f64) {
+        return false;
+    }
+    if value < def.min_value || value > def.max_value {
+        return false;
+    }
+    if def.increment_only && value < current {
+        return false;
+    }
+    def.max_change <= 0.0 || (value - current).abs() <= def.max_change
 }
 
 #[cfg(test)]
@@ -294,6 +353,16 @@ impl Kv {
             KvValue::None => 0,
         }
     }
+    fn as_float(&self) -> f64 {
+        match &self.value {
+            KvValue::Int(i) => *i as f64,
+            KvValue::U32(u) => *u as f64,
+            KvValue::UInt64(u) => *u as f64,
+            KvValue::Float(f) => *f as f64,
+            KvValue::Str(s) => s.parse().unwrap_or(0.0),
+            KvValue::None => 0.0,
+        }
+    }
     fn as_bool(&self) -> bool {
         self.as_int() != 0
     }
@@ -379,7 +448,10 @@ fn parse_kv(data: &[u8]) -> Option<Kv> {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_account_id, writable_stat_def, StatChange, StatDef};
+    use super::{
+        choose_account_id, stat_i32_value, stat_value_is_valid, writable_stat_def, StatChange,
+        StatDef,
+    };
 
     fn stat(id: &str, is_float: bool, permission: i32, increment_only: bool) -> StatDef {
         StatDef {
@@ -388,6 +460,9 @@ mod tests {
             is_float,
             permission,
             increment_only,
+            min_value: if is_float { -10.0 } else { 0.0 },
+            max_value: if is_float { 10.0 } else { 100.0 },
+            max_change: 0.0,
         }
     }
 
@@ -427,6 +502,73 @@ mod tests {
     }
 
     #[test]
+    fn stat_value_validation_enforces_schema_bounds_and_integer_shape() {
+        let mut int_def = stat("kills", false, 0, false);
+        int_def.max_change = 10.0;
+
+        assert!(stat_value_is_valid(
+            &int_def,
+            &StatChange {
+                id: "kills".into(),
+                value: 15.0,
+            },
+            10.0,
+        ));
+        assert!(!stat_value_is_valid(
+            &int_def,
+            &StatChange {
+                id: "kills".into(),
+                value: 15.5,
+            },
+            10.0,
+        ));
+        assert!(!stat_value_is_valid(
+            &int_def,
+            &StatChange {
+                id: "kills".into(),
+                value: 25.0,
+            },
+            10.0,
+        ));
+        assert!(!stat_value_is_valid(
+            &int_def,
+            &StatChange {
+                id: "kills".into(),
+                value: 101.0,
+            },
+            95.0,
+        ));
+    }
+
+    #[test]
+    fn stat_value_validation_blocks_increment_only_decreases_and_non_finite_values() {
+        let inc_def = stat("xp", true, 0, true);
+        assert!(!stat_value_is_valid(
+            &inc_def,
+            &StatChange {
+                id: "xp".into(),
+                value: 4.0,
+            },
+            5.0,
+        ));
+        assert!(!stat_value_is_valid(
+            &inc_def,
+            &StatChange {
+                id: "xp".into(),
+                value: f64::NAN,
+            },
+            5.0,
+        ));
+        assert_eq!(
+            stat_i32_value(&StatChange {
+                id: "xp".into(),
+                value: 7.0,
+            }),
+            Some(7),
+        );
+    }
+
+    #[test]
     fn choose_account_id_prefers_account_with_game_cache() {
         let accounts = [101, 202, 303];
         let chosen = choose_account_id(accounts, |id| id == 202);
@@ -444,7 +586,8 @@ mod tests {
 #[cfg(windows)]
 mod imp {
     use super::{
-        choose_account_id_with_preferred, parse_most_recent_account_id, text_vdf_tokens,
+        choose_account_id_with_preferred, parse_most_recent_account_id, stat_bound,
+        stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid, text_vdf_tokens,
         writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatDef,
         StatInfo,
     };
@@ -1290,26 +1433,29 @@ mod imp {
                             Ok(c) => c,
                             Err(_) => continue,
                         };
-                        // Never lower an increment-only stat (Steam/schema rule): read the
-                        // current value and skip the write if this change would decrease it.
-                        if def.increment_only {
-                            let cur = if def.is_float {
-                                let mut v: f32 = 0.0;
-                                get_float(stats, idc.as_ptr(), &mut v);
-                                v as f64
-                            } else {
-                                let mut v: i32 = 0;
-                                get_int(stats, idc.as_ptr(), &mut v);
-                                v as f64
-                            };
-                            if sc.value < cur {
+                        let current = if def.is_float {
+                            let mut v: f32 = 0.0;
+                            if get_float(stats, idc.as_ptr(), &mut v) == 0 {
                                 continue;
                             }
+                            v as f64
+                        } else {
+                            let mut v: i32 = 0;
+                            if get_int(stats, idc.as_ptr(), &mut v) == 0 {
+                                continue;
+                            }
+                            v as f64
+                        };
+                        if !stat_value_is_valid(def, sc, current) {
+                            continue;
                         }
                         let ok = if def.is_float {
                             set_float(stats, idc.as_ptr(), sc.value as f32)
                         } else {
-                            set_int(stats, idc.as_ptr(), sc.value as i32)
+                            let Some(value) = stat_i32_value(sc) else {
+                                continue;
+                            };
+                            set_int(stats, idc.as_ptr(), value)
                         };
                         if ok != 0 {
                             applied += 1;
@@ -1435,6 +1581,9 @@ mod imp {
                         .child("incrementonly")
                         .map(|p| p.as_bool())
                         .unwrap_or(false),
+                    min_value: stat_bound(stat, "min", stat_min_default(kind == 2)),
+                    max_value: stat_bound(stat, "max", stat_max_default(kind == 2)),
+                    max_change: stat_bound(stat, "maxchange", 0.0).max(0.0),
                     id,
                 });
             }

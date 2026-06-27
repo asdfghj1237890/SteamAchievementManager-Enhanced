@@ -21,6 +21,9 @@ import {
 import type { Game, GameCompletion, GameSummary, StyleTokens, Tab, ThemeTokens } from '../types'
 
 const TOAST_MS = 2300
+const CACHE_WRITE_MS = 600
+const PROGRESS_FLUSH_MS = 120
+const PROGRESS_BATCH_SIZE = 24
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const sameRecord = <T,>(a: Record<string, T>, b: Record<string, T>): boolean => {
   const aKeys = Object.keys(a)
@@ -64,6 +67,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state)
   stateRef.current = state
   const toastTimer = useRef<number | undefined>(undefined)
+  const cacheTimer = useRef<number | undefined>(undefined)
   const detailSeq = useRef(0)
 
   const set = useCallback((a: Action) => dispatch(a), [])
@@ -132,8 +136,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ---- persist the games list (with completions) for next launch ----
   useEffect(() => {
-    if (isTauri() && state.gamesStatus === 'ready' && state.games.length) {
-      saveGamesCache(state.games)
+    if (!isTauri() || state.gamesStatus !== 'ready' || !state.games.length) return
+    if (cacheTimer.current) window.clearTimeout(cacheTimer.current)
+    const snapshot = state.games
+    cacheTimer.current = window.setTimeout(() => {
+      saveGamesCache(snapshot)
+      cacheTimer.current = undefined
+    }, CACHE_WRITE_MS)
+    return () => {
+      if (cacheTimer.current) {
+        window.clearTimeout(cacheTimer.current)
+        cacheTimer.current = undefined
+      }
     }
   }, [state.games, state.gamesStatus])
 
@@ -183,29 +197,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const queue = stateRef.current.games.map((g) => g.appId)
     let idx = 0
     const LIMIT = 3
+    const pending = new Map<string, GameCompletion | undefined>()
+    let flushTimer: number | undefined
+
+    const flush = () => {
+      if (cancelled || pending.size === 0) return
+      const updates = new Map(pending)
+      pending.clear()
+      dispatch((cur) => ({
+        games: cur.games.map((g) =>
+          updates.has(g.appId) ? { ...g, completion: updates.get(g.appId) } : g,
+        ),
+      }))
+    }
+
+    const scheduleFlush = () => {
+      if (flushTimer !== undefined) return
+      flushTimer = window.setTimeout(() => {
+        flushTimer = undefined
+        flush()
+      }, PROGRESS_FLUSH_MS)
+    }
+
+    const recordProgress = (appId: string, completion: GameCompletion | undefined) => {
+      pending.set(appId, completion)
+      if (pending.size >= PROGRESS_BATCH_SIZE) {
+        if (flushTimer !== undefined) {
+          window.clearTimeout(flushTimer)
+          flushTimer = undefined
+        }
+        flush()
+      } else {
+        scheduleFlush()
+      }
+    }
+
+    let activeWorkers = Math.min(LIMIT, queue.length)
+    if (activeWorkers === 0) return
     const worker = async () => {
-      while (!cancelled && idx < queue.length) {
-        const appId = queue[idx++]
-        try {
-          const completion = await loadProgress(appId)
-          if (!cancelled) {
-            dispatch((cur) => ({
-              games: cur.games.map((g) => (g.appId === appId ? { ...g, completion } : g)),
-            }))
+      try {
+        while (!cancelled && idx < queue.length) {
+          const appId = queue[idx++]
+          try {
+            recordProgress(appId, await loadProgress(appId))
+          } catch {
+            // Missing/invalid local cache means we should not keep showing stale progress.
+            recordProgress(appId, undefined)
           }
-        } catch {
-          // Missing/invalid local cache means we should not keep showing stale progress.
-          if (!cancelled) {
-            dispatch((cur) => ({
-              games: cur.games.map((g) => (g.appId === appId ? { ...g, completion: undefined } : g)),
-            }))
+        }
+      } finally {
+        activeWorkers -= 1
+        if (activeWorkers === 0) {
+          if (flushTimer !== undefined) {
+            window.clearTimeout(flushTimer)
+            flushTimer = undefined
           }
+          flush()
         }
       }
     }
-    for (let i = 0; i < LIMIT; i += 1) void worker()
+    for (let i = 0; i < activeWorkers; i += 1) void worker()
     return () => {
       cancelled = true
+      if (flushTimer !== undefined) window.clearTimeout(flushTimer)
     }
   }, [state.gamesStatus, source, gamesKey, state.progressRefreshSeq])
 

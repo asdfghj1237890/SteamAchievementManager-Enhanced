@@ -29,6 +29,8 @@ export default function Cover({
           src={src}
           alt=""
           draggable={false}
+          loading="lazy"
+          decoding="async"
           onLoad={() => setLoaded(true)}
           onError={onError}
           style={{

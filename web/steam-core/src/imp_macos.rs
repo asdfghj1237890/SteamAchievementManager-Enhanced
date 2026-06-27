@@ -3,7 +3,8 @@
 //! are deferred this milestone (see lib.rs `write_game`).
 
 use super::{
-    choose_account_id_with_preferred, parse_most_recent_account_id, writable_stat_def, AchChange,
+    choose_account_id_with_preferred, parse_most_recent_account_id, stat_bound, stat_i32_value,
+    stat_max_default, stat_min_default, stat_value_is_valid, writable_stat_def, AchChange,
     AchievementInfo, GameStats, OwnedGame, StatChange, StatDef, StatInfo,
 };
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -583,6 +584,9 @@ impl SteamClient {
                     .child("incrementonly")
                     .map(|p| p.as_bool())
                     .unwrap_or(false),
+                min_value: stat_bound(stat, "min", stat_min_default(kind == 2)),
+                max_value: stat_bound(stat, "max", stat_max_default(kind == 2)),
+                max_change: stat_bound(stat, "maxchange", 0.0).max(0.0),
                 id,
             });
         }
@@ -834,26 +838,29 @@ impl SteamClient {
                         Ok(c) => c,
                         Err(_) => continue,
                     };
-                    // Never lower an increment-only stat: read the current value and skip
-                    // the write if this change would decrease it.
-                    if def.increment_only {
-                        let cur = if def.is_float {
-                            let mut v: f32 = 0.0;
-                            get_float(stats, idc.as_ptr(), &mut v);
-                            v as f64
-                        } else {
-                            let mut v: i32 = 0;
-                            get_int(stats, idc.as_ptr(), &mut v);
-                            v as f64
-                        };
-                        if sc.value < cur {
+                    let current = if def.is_float {
+                        let mut v: f32 = 0.0;
+                        if get_float(stats, idc.as_ptr(), &mut v) == 0 {
                             continue;
                         }
+                        v as f64
+                    } else {
+                        let mut v: i32 = 0;
+                        if get_int(stats, idc.as_ptr(), &mut v) == 0 {
+                            continue;
+                        }
+                        v as f64
+                    };
+                    if !stat_value_is_valid(def, sc, current) {
+                        continue;
                     }
                     let ok = if def.is_float {
                         set_float(stats, idc.as_ptr(), sc.value as f32)
                     } else {
-                        set_int(stats, idc.as_ptr(), sc.value as i32)
+                        let Some(value) = stat_i32_value(sc) else {
+                            continue;
+                        };
+                        set_int(stats, idc.as_ptr(), value)
                     };
                     if ok != 0 {
                         applied += 1;
