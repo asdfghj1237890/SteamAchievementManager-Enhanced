@@ -7,8 +7,8 @@ import type { AppState } from './store'
  *
  * Alongside caching the in-memory detail (loaded / achState / statState / origAch /
  * origStat), this records the game's *completion* on its library-list entry. The
- * games-cache effect persists that, so a game you've opened keeps its progress bar on the
- * next launch instead of reloading — and the background progress loader skips it.
+ * games-cache effect persists that, so repeat launches show a recent value while
+ * the background progress loader refreshes it.
  */
 export function applyLoadedGame(state: AppState, appId: string, game: Game): Partial<AppState> {
   const ach: Record<string, boolean> = {}

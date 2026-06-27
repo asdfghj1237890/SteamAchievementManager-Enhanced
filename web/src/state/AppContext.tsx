@@ -10,6 +10,7 @@ import type { GameChanges } from '../data/source'
 import { reducer, makeInitialState, type Action, type AppState } from './store'
 import { applyLoadedGame } from './applyLoadedGame'
 import { applyPartialSave } from './applyPartialSave'
+import { appIdKey, mergeFreshGames } from './gameListMerge'
 import { getVersion } from '@tauri-apps/api/app'
 import { fetchLatestVersion, openReleasesPage } from '../data/update'
 import { isNewer } from '../lib/version'
@@ -21,6 +22,11 @@ import type { Game, GameCompletion, GameSummary, StyleTokens, Tab, ThemeTokens }
 
 const TOAST_MS = 2300
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+const sameRecord = <T,>(a: Record<string, T>, b: Record<string, T>): boolean => {
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  return aKeys.length === bKeys.length && aKeys.every((k) => Object.is(a[k], b[k]))
+}
 
 interface AppContextValue {
   state: AppState
@@ -58,6 +64,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state)
   stateRef.current = state
   const toastTimer = useRef<number | undefined>(undefined)
+  const detailSeq = useRef(0)
 
   const set = useCallback((a: Action) => dispatch(a), [])
 
@@ -70,6 +77,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const t = useMemo<Translate>(() => (key, params) => translate(state.lang, key, params), [state.lang])
   const tRef = useRef(t)
   tRef.current = t
+  const gamesKey = useMemo(() => appIdKey(state.games), [state.games])
 
   useEffect(() => {
     if (state.toast == null) return
@@ -94,10 +102,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .then((fresh) => {
         if (cancelled) return
         dispatch((cur) => {
-          // keep already-known completions while the list refreshes
-          const prev = new Map(cur.games.map((g) => [g.appId, g.completion]))
-          const merged = fresh.map((g) => ({ ...g, completion: g.completion ?? prev.get(g.appId) }))
-          return { games: merged, gamesStatus: 'ready', gamesError: null }
+          return { games: mergeFreshGames(cur.games, fresh), gamesStatus: 'ready', gamesError: null }
         })
       })
       .catch((e) => {
@@ -175,7 +180,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const loadProgress = source.loadProgress?.bind(source)
     if (state.gamesStatus !== 'ready' || !loadProgress) return
     let cancelled = false
-    const queue = stateRef.current.games.filter((g) => !g.completion).map((g) => g.appId)
+    const queue = stateRef.current.games.map((g) => g.appId)
     let idx = 0
     const LIMIT = 3
     const worker = async () => {
@@ -189,7 +194,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
             }))
           }
         } catch {
-          // ignore per-game failures; that game just keeps its "—"
+          // Missing/invalid local cache means we should not keep showing stale progress.
+          if (!cancelled) {
+            dispatch((cur) => ({
+              games: cur.games.map((g) => (g.appId === appId ? { ...g, completion: undefined } : g)),
+            }))
+          }
         }
       }
     }
@@ -197,31 +207,62 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [state.gamesStatus, source])
+  }, [state.gamesStatus, source, gamesKey, state.progressRefreshSeq])
 
   // ---- lazily load + cache one game's detail ----
-  const openGame = useCallback(
-    (appId: string) => {
-      const s = stateRef.current
-      if (s.loaded[appId]) {
-        if (s.activeAppId !== appId || s.detailStatus !== 'ready') {
-          dispatch({ activeAppId: appId, detailStatus: 'ready', detailError: null })
-        }
-        return
+  const reloadGame = useCallback(
+    (appId: string, mode: 'visible' | 'silent') => {
+      const seq = detailSeq.current + 1
+      detailSeq.current = seq
+      const snapshot = stateRef.current
+      const achSnapshot = { ...(snapshot.achState[appId] ?? {}) }
+      const statSnapshot = { ...(snapshot.statState[appId] ?? {}) }
+
+      if (mode === 'visible') {
+        dispatch({ activeAppId: appId, detailStatus: 'loading', detailError: null })
       }
-      dispatch({ activeAppId: appId, detailStatus: 'loading', detailError: null })
+
       source
         .loadGame(appId)
         .then((game) => {
-          dispatch((cur) => applyLoadedGame(cur, appId, game))
+          dispatch((cur) => {
+            if (detailSeq.current !== seq) return {}
+            if (
+              mode === 'silent' &&
+              (!sameRecord(cur.achState[appId] ?? {}, achSnapshot) ||
+                !sameRecord(cur.statState[appId] ?? {}, statSnapshot))
+            ) {
+              return {}
+            }
+            return applyLoadedGame(cur, appId, game)
+          })
         })
         .catch((e) => {
+          if (detailSeq.current !== seq || mode === 'silent') return
           dispatch((cur) =>
             cur.activeAppId === appId ? { detailStatus: 'error', detailError: errMsg(e) } : {},
           )
         })
     },
     [source],
+  )
+
+  const openGame = useCallback(
+    (appId: string) => {
+      const s = stateRef.current
+      const loaded = s.loaded[appId]
+      if (loaded) {
+        if (s.activeAppId !== appId || s.detailStatus !== 'ready') {
+          dispatch({ activeAppId: appId, detailStatus: 'ready', detailError: null })
+        }
+        if (pendingCount(loaded, s.achState, s.origAch, s.statState, s.origStat) === 0) {
+          reloadGame(appId, 'silent')
+        }
+        return
+      }
+      reloadGame(appId, 'visible')
+    },
+    [reloadGame],
   )
 
   // ---- navigation ----
@@ -234,10 +275,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .listGames()
       .then((fresh) => {
         dispatch((cur) => {
-          const prev = new Map(cur.games.map((g) => [g.appId, g.completion]))
           const patch: Partial<AppState> = {
-            games: fresh.map((g) => ({ ...g, completion: g.completion ?? prev.get(g.appId) })),
+            games: mergeFreshGames(cur.games, fresh),
             gamesStatus: 'ready',
+            progressRefreshSeq: cur.progressRefreshSeq + 1,
           }
           return patch
         })
@@ -248,8 +289,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .loadCategories?.()
       .then((cats) => dispatch({ categories: cats }))
       .catch(() => {})
+    const s = stateRef.current
+    const appId = s.activeAppId
+    const game = appId ? s.loaded[appId] : null
+    if (appId && game && pendingCount(game, s.achState, s.origAch, s.statState, s.origStat) === 0) {
+      reloadGame(appId, 'silent')
+    }
     showToast(tRef.current('toast.refreshing'))
-  }, [source, showToast])
+  }, [source, showToast, reloadGame])
   const gotoTab = useCallback(
     (appId: string, tab: Tab) => navigate(tab === 'stats' ? `/game/${appId}/stats` : `/game/${appId}`),
     [navigate],

@@ -102,4 +102,6 @@ export interface GameSummary {
   hue: number
   /** Optional — a real Steam source may omit/lazy-load this. */
   completion?: GameCompletion
+  /** Added explicitly by App ID and preserved across library refreshes. */
+  manual?: boolean
 }

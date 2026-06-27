@@ -33,6 +33,8 @@ export interface AppState {
   addId: string
   /** Game-list (sidebar) width in px; drag-resizable, persisted in settings. */
   sidebarWidth: number
+  /** Incremented when the list should refresh even already-cached completion rows. */
+  progressRefreshSeq: number
 
   // games list (loaded once)
   gamesStatus: LoadStatus
@@ -95,6 +97,7 @@ export function makeInitialState(): AppState {
     statsEditing: false,
     addId: '',
     sidebarWidth: clampSidebar(saved.sidebarWidth ?? 280),
+    progressRefreshSeq: 0,
 
     gamesStatus: 'idle',
     games: [],
