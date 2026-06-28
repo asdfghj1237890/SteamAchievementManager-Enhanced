@@ -3,9 +3,10 @@
 //! are deferred this milestone (see lib.rs `write_game`).
 
 use super::{
-    choose_account_id_with_preferred, parse_most_recent_account_id, stat_bound, stat_i32_value,
-    stat_max_default, stat_min_default, stat_value_is_valid, writable_stat_def, AchChange,
-    AchievementInfo, GameStats, OwnedGame, StatChange, StatDef, StatInfo,
+    achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
+    stat_bound, stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid,
+    writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatDef,
+    StatInfo,
 };
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::Path;
@@ -799,9 +800,9 @@ impl SteamClient {
                 match self.read_ach_perms(app_id) {
                     Some(ach_perms) => {
                         for ch in ach_changes {
-                            // Same `& 3` mask as the read path; an unknown id (perm 0)
-                            // stays writable — Steam itself rejects bogus names.
-                            if (ach_perms.get(&ch.id).copied().unwrap_or(0) & 3) != 0 {
+                            // Same `& 3` mask as the read path, but fail closed for
+                            // unknown ids instead of assuming permission 0.
+                            if !achievement_write_allowed(&ach_perms, &ch.id) {
                                 continue;
                             }
                             let idc = match CString::new(ch.id.clone()) {

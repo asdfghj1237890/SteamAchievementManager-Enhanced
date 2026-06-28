@@ -147,6 +147,15 @@ fn writable_stat_def<'a>(defs: &'a [StatDef], change: &StatChange) -> Option<&'a
         .filter(|d| (d.permission & 2) == 0)
 }
 
+fn achievement_write_allowed(
+    ach_perms: &std::collections::HashMap<String, i32>,
+    achievement_id: &str,
+) -> bool {
+    ach_perms
+        .get(achievement_id)
+        .is_some_and(|permission| (permission & 3) == 0)
+}
+
 fn stat_min_default(is_float: bool) -> f64 {
     if is_float {
         f32::MIN as f64
@@ -449,9 +458,10 @@ fn parse_kv(data: &[u8]) -> Option<Kv> {
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_account_id, stat_i32_value, stat_value_is_valid, writable_stat_def, StatChange,
-        StatDef,
+        achievement_write_allowed, choose_account_id, stat_i32_value, stat_value_is_valid,
+        writable_stat_def, StatChange, StatDef,
     };
+    use std::collections::HashMap;
 
     fn stat(id: &str, is_float: bool, permission: i32, increment_only: bool) -> StatDef {
         StatDef {
@@ -499,6 +509,15 @@ mod tests {
             },
         );
         assert!(unknown.is_none());
+    }
+
+    #[test]
+    fn achievement_write_allowed_rejects_protected_and_unknown_ids() {
+        let perms = HashMap::from([("known".to_string(), 0), ("protected".to_string(), 3)]);
+
+        assert!(achievement_write_allowed(&perms, "known"));
+        assert!(!achievement_write_allowed(&perms, "protected"));
+        assert!(!achievement_write_allowed(&perms, "crafted"));
     }
 
     #[test]
@@ -586,10 +605,10 @@ mod tests {
 #[cfg(windows)]
 mod imp {
     use super::{
-        choose_account_id_with_preferred, parse_most_recent_account_id, stat_bound, stat_i32_value,
-        stat_max_default, stat_min_default, stat_value_is_valid, text_vdf_tokens,
-        writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatDef,
-        StatInfo,
+        achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
+        stat_bound, stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid,
+        text_vdf_tokens, writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame,
+        StatChange, StatDef, StatInfo,
     };
     use std::ffi::{c_char, c_void, CStr, CString};
     use std::path::Path;
@@ -1394,9 +1413,9 @@ mod imp {
                     match self.read_ach_perms(app_id) {
                         Some(ach_perms) => {
                             for ch in ach_changes {
-                                // Same `& 3` mask as the read path; an unknown id (perm 0)
-                                // stays writable — Steam itself rejects bogus names.
-                                if (ach_perms.get(&ch.id).copied().unwrap_or(0) & 3) != 0 {
+                                // Same `& 3` mask as the read path, but fail closed for
+                                // unknown ids instead of assuming permission 0.
+                                if !achievement_write_allowed(&ach_perms, &ch.id) {
                                     continue;
                                 }
                                 let idc = match CString::new(ch.id.clone()) {
