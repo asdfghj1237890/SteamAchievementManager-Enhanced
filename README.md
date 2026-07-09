@@ -69,7 +69,7 @@ The modern app lives in [`web/`](web/):
 
 ```bash
 cd web
-npm install
+npm ci
 
 # Web demo — mock data, no Steam, runs in a browser
 npm run dev
@@ -81,6 +81,23 @@ npm run tauri -- dev
 # Production desktop build (installer / .app)
 npm run tauri -- build
 ```
+
+### Automated tests
+
+The modern app has a CI-enforced automation stack covering Vitest unit/component
+and IPC-contract tests, coverage thresholds, Playwright UI and smoke journeys in
+Chromium/Firefox/WebKit, axe WCAG A/AA checks, Rust test + Clippy on Windows and
+macOS, dependency audits, and a built Tauri executable smoke test. It never
+performs automated writes to Steam.
+
+```bash
+cd web
+npm ci
+npm run test:all
+```
+
+See [`web/TESTING.md`](web/TESTING.md) for individual commands, CI behavior,
+diagnostics, and the safe native smoke boundary.
 
 > Read-only Steam smoke tests (safe, never write): from [`web/steam-core`](web/steam-core),
 > `cargo run --bin probe <appId>…` checks ownership and `cargo run --bin read-game <appId>`

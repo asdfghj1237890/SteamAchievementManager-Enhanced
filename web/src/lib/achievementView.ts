@@ -105,7 +105,7 @@ export function enrichAchievement(g: Game, a: Achievement, t: Translate, savedUn
       cursor: 'pointer', opacity: a.unlocked ? 1 : 0.84, transition: 'background .12s',
     },
     checkStyle: a.unlocked
-      ? { ...ckBase, background: 'var(--accent)', borderColor: 'var(--accent)' }
+      ? { ...ckBase, background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-ink)' }
       : a.protected
         ? { ...ckBase, borderStyle: 'dashed', color: 'var(--t3)', cursor: 'not-allowed', fontSize: '11px' }
         : { ...ckBase },

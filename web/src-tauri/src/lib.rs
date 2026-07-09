@@ -341,3 +341,25 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_worker;
+
+    #[test]
+    fn worker_rejects_missing_or_invalid_app_id_without_connecting_to_steam() {
+        assert_eq!(run_worker(&[]).unwrap_err(), "worker：缺少有效的 appId");
+        assert_eq!(
+            run_worker(&["read".into(), "not-a-number".into()]).unwrap_err(),
+            "worker：缺少有效的 appId"
+        );
+    }
+
+    #[test]
+    fn worker_rejects_unknown_mode_without_connecting_to_steam() {
+        assert_eq!(
+            run_worker(&["invalid-smoke-mode".into(), "1".into()]).unwrap_err(),
+            "worker：未知模式 invalid-smoke-mode"
+        );
+    }
+}

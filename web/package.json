@@ -10,7 +10,18 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "typecheck": "tsc -b",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test --project=chromium --grep @smoke",
+    "test:a11y": "playwright test --project=chromium --grep @a11y",
+    "smoke:native": "node scripts/native-smoke.mjs",
+    "test:web": "npm run typecheck && npm run test:coverage && npm run build && npm run test:e2e",
+    "test:rust": "cargo test --manifest-path steam-core/Cargo.toml --all-targets --all-features && cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features",
+    "lint:rust": "cargo fmt --manifest-path steam-core/Cargo.toml --all -- --check && cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --manifest-path steam-core/Cargo.toml --all-targets --all-features -- -D warnings && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
+    "test:native": "npm run tauri -- build --debug --no-bundle --ci && npm run smoke:native",
+    "test:all": "npm run test:web && npm run test:rust && npm run lint:rust && npm run test:native"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
@@ -19,10 +30,18 @@
     "react-router-dom": "^6.30.4"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
     "@tauri-apps/cli": "2.11.4",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "20.19.43",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^6.0.2",
+    "@vitest/coverage-v8": "4.1.9",
+    "jsdom": "29.1.1",
     "typescript": "~5.6.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.9"

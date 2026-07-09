@@ -69,6 +69,7 @@ export default function Statistics() {
                   {editable ? (
                     <input
                       value={String(cur)}
+                      aria-label={s.name}
                       onChange={(e) => setStat(g.id, s.id, e.target.value)}
                       onBlur={() => {
                         // increment-only stats can only go up — revert an illegal decrease.

@@ -101,7 +101,21 @@ export default function Sidebar() {
       background: selected ? 'var(--accent)' : 'var(--t3)', transition: 'width .3s',
     }
     return (
-      <div key={g.id} style={rowStyle} onClick={() => selectGame(g.appId)}>
+      <div
+        key={g.id}
+        style={rowStyle}
+        onClick={() => selectGame(g.appId)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            selectGame(g.appId)
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={g.name}
+        data-testid={`sidebar-game-${g.appId}`}
+      >
         <Cover appId={g.appId} style={coverStyle}>{g.name[0]}</Cover>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -131,6 +145,14 @@ export default function Sidebar() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '11px' }}>
           <span
             onClick={openLibrary}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openLibrary()
+              }
+            }}
+            role="button"
+            tabIndex={0}
             style={{
               fontSize: '12px', fontWeight: 700, letterSpacing: '.4px', cursor: 'pointer',
               fontFamily: 'var(--meta)', color: onLibrary ? 'var(--accent)' : 'var(--t2)',
@@ -153,6 +175,7 @@ export default function Sidebar() {
             value={state.gameSearch}
             onChange={(e) => set({ gameSearch: e.target.value })}
             placeholder={t('sidebar.searchGames')}
+            aria-label={t('sidebar.searchGames')}
             style={inputBase}
           />
         </div>
@@ -224,6 +247,7 @@ export default function Sidebar() {
             value={state.addId}
             onChange={(e) => set({ addId: e.target.value })}
             placeholder={t('sidebar.addPlaceholder')}
+            aria-label={t('sidebar.addPlaceholder')}
             style={{
               flex: 1, padding: '7px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
               background: 'var(--s0)', color: 'var(--t1)', fontSize: '12.5px', outline: 'none', fontFamily: 'var(--meta)',
@@ -231,6 +255,7 @@ export default function Sidebar() {
           />
           <button
             onClick={onAdd}
+            aria-label={t('sidebar.addPlaceholder')}
             style={{
               padding: '7px 13px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
               background: 'var(--s2)', color: 'var(--t1)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
@@ -251,6 +276,7 @@ export default function Sidebar() {
           </button>
           <button
             onClick={() => (onSettings ? openLibrary() : openSettings())}
+            data-testid="settings-toggle"
             style={{
               padding: '8px 12px', borderRadius: 'var(--radius)', flex: '0 0 auto',
               border: '1px solid ' + (onSettings ? 'color-mix(in srgb, var(--accent) 45%, var(--bd))' : 'var(--bd)'),

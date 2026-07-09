@@ -20,6 +20,11 @@ permissions:
   contents: read
 
 jobs:
+  # Releases reuse the same full test matrix as pull requests, so a tag cannot
+  # publish by bypassing browser, Rust, accessibility, or native smoke gates.
+  quality:
+    uses: ./.github/workflows/test.yml
+
   # Fail fast if the git tag and the app's own version (what getVersion() reports)
   # disagree — otherwise a release built without bumping the version files would
   # immediately nag users to "update" to the version they just installed.
@@ -40,7 +45,7 @@ jobs:
           echo "version OK: $want"
 
   build-windows:
-    needs: [verify-version]
+    needs: [verify-version, quality]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -72,7 +77,7 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    needs: [verify-version]
+    needs: [verify-version, quality]
     runs-on: macos-latest # Apple Silicon (arm64)
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

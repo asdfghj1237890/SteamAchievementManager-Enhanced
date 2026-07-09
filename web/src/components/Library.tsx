@@ -39,7 +39,21 @@ function LibraryCard({ g }: { g: GameSummary }) {
   }
 
   return (
-    <div style={cardStyle} onClick={() => selectGame(g.appId)} {...hoverProps}>
+    <div
+      style={cardStyle}
+      onClick={() => selectGame(g.appId)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          selectGame(g.appId)
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={g.name}
+      data-testid={`library-game-${g.appId}`}
+      {...hoverProps}
+    >
       <Cover appId={g.appId} style={capsuleStyle}>
         {g.name[0]}
         <span style={{ position: 'absolute', bottom: '7px', right: '10px', fontSize: '8.5px', letterSpacing: '1px', fontFamily: 'var(--meta)', color: 'rgba(255,255,255,.5)' }}>
@@ -94,6 +108,7 @@ export default function Library() {
     <div
       ref={virtual.containerRef}
       onScroll={virtual.onScroll}
+      data-testid="library-screen"
       style={{ flex: 1, overflowY: 'auto', padding: '22px 24px 26px', minHeight: 0 }}
     >
       <div style={{ marginBottom: '18px' }}>
