@@ -23,8 +23,6 @@ import type { Game, GameCompletion, GameSummary, StyleTokens, Tab, ThemeTokens }
 
 const TOAST_MS = 2300
 const CACHE_WRITE_MS = 600
-const PROGRESS_FLUSH_MS = 120
-const PROGRESS_BATCH_SIZE = 24
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const sameRecord = <T,>(a: Record<string, T>, b: Record<string, T>): boolean => {
   const aKeys = Object.keys(a)
@@ -192,75 +190,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ---- background-load every game's completion (real source only) ----
   useEffect(() => {
-    const loadProgress = source.loadProgress?.bind(source)
-    if (state.gamesStatus !== 'ready' || !loadProgress) return
+    const loadProgressBatch = source.loadProgressBatch?.bind(source)
+    if (state.gamesStatus !== 'ready' || !loadProgressBatch) return
     let cancelled = false
-    const queue = stateRef.current.games.map((g) => g.appId)
-    let idx = 0
-    const LIMIT = 3
-    const pending = new Map<string, GameCompletion | undefined>()
-    let flushTimer: number | undefined
-
-    const flush = () => {
-      if (cancelled || pending.size === 0) return
-      const updates = new Map(pending)
-      pending.clear()
-      dispatch((cur) => ({
-        games: cur.games.map((g) =>
-          updates.has(g.appId) ? { ...g, completion: updates.get(g.appId) } : g,
-        ),
-      }))
-    }
-
-    const scheduleFlush = () => {
-      if (flushTimer !== undefined) return
-      flushTimer = window.setTimeout(() => {
-        flushTimer = undefined
-        flush()
-      }, PROGRESS_FLUSH_MS)
-    }
-
-    const recordProgress = (appId: string, completion: GameCompletion | undefined) => {
-      pending.set(appId, completion)
-      if (pending.size >= PROGRESS_BATCH_SIZE) {
-        if (flushTimer !== undefined) {
-          window.clearTimeout(flushTimer)
-          flushTimer = undefined
-        }
-        flush()
-      } else {
-        scheduleFlush()
-      }
-    }
-
-    let activeWorkers = Math.min(LIMIT, queue.length)
-    if (activeWorkers === 0) return
-    const worker = async () => {
-      try {
-        while (!cancelled && idx < queue.length) {
-          const appId = queue[idx++]
-          try {
-            recordProgress(appId, await loadProgress(appId))
-          } catch {
-            // Missing/invalid local cache means we should not keep showing stale progress.
-            recordProgress(appId, undefined)
-          }
-        }
-      } finally {
-        activeWorkers -= 1
-        if (activeWorkers === 0) {
-          if (flushTimer !== undefined) {
-            window.clearTimeout(flushTimer)
-            flushTimer = undefined
-          }
-          flush()
-        }
-      }
-    }
-    for (let i = 0; i < activeWorkers; i += 1) void worker()
+    const appIds = stateRef.current.games.map((g) => g.appId)
+    if (appIds.length === 0) return
+    const requested = new Set(appIds)
+    void loadProgressBatch(appIds)
+      .then((updates) => {
+        if (cancelled) return
+        dispatch((cur) => ({
+          games: cur.games.map((g) =>
+            requested.has(g.appId) ? { ...g, completion: updates[g.appId] } : g,
+          ),
+        }))
+      })
+      .catch(() => {
+        // Preserve the last known cache when the entire batch fails. Individual games
+        // without a local cache are omitted from a successful result and cleared above.
+      })
     return () => {
       cancelled = true
-      if (flushTimer !== undefined) window.clearTimeout(flushTimer)
     }
   }, [state.gamesStatus, source, gamesKey, state.progressRefreshSeq])
 

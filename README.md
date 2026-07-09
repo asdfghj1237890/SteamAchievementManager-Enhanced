@@ -75,11 +75,11 @@ npm install
 npm run dev
 
 # Desktop app — real local Steam (Windows or macOS/Apple Silicon;
-# needs the Rust toolchain + the Tauri CLI). Steam must be running + logged in.
-npx @tauri-apps/cli@^2 dev    # or: cargo tauri dev (after `cargo install tauri-cli`)
+# needs the pinned Rust toolchain + lockfile-installed Tauri CLI). Steam must be running + logged in.
+npm run tauri -- dev
 
 # Production desktop build (installer / .app)
-npx @tauri-apps/cli@^2 build
+npm run tauri -- build
 ```
 
 > Read-only Steam smoke tests (safe, never write): from [`web/steam-core`](web/steam-core),

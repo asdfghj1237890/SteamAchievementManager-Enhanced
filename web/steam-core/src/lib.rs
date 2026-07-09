@@ -8,6 +8,14 @@
 //! how SAM uses a separate process per game.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const APP_LIST_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const APP_LIST_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const APP_LIST_MAX_ENTRIES: usize = 250_000;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OwnedGame {
@@ -17,44 +25,145 @@ pub struct OwnedGame {
     pub kind: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct GameProgress {
+    pub app_id: u32,
+    pub earned: u32,
+    pub total: u32,
+}
+
 /// Parse the SAM games.xml: entries are `<game>APPID</game>` or
 /// `<game type="demo">APPID</game>`. Returns (appId, type) pairs.
 pub fn parse_app_list(xml: &str) -> Vec<(u32, String)> {
+    parse_app_list_with_limit(xml, APP_LIST_MAX_ENTRIES).unwrap_or_default()
+}
+
+fn parse_app_list_with_limit(xml: &str, max_entries: usize) -> Result<Vec<(u32, String)>, String> {
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
     for chunk in xml.split("<game").skip(1) {
         let Some(gt) = chunk.find('>') else { continue };
         let head = &chunk[..gt];
-        let kind = head
+        let raw_kind = head
             .find("type=\"")
             .and_then(|i| {
                 let rest = &head[i + 6..];
-                rest.find('"').map(|j| rest[..j].to_string())
+                rest.find('"').map(|j| &rest[..j])
             })
             .unwrap_or_default();
+        let kind = match raw_kind {
+            "demo" | "mod" => raw_kind.to_string(),
+            _ => String::new(),
+        };
         let body = &chunk[gt + 1..];
         let Some(end) = body.find("</game>") else {
             continue;
         };
         if let Ok(id) = body[..end].trim().parse::<u32>() {
+            if id == 0 || !seen.insert(id) {
+                continue;
+            }
+            if out.len() >= max_entries {
+                return Err(format!("games.xml 超過 {max_entries} 筆唯一 appId 上限"));
+            }
             out.push((id, kind));
         }
     }
-    out
+    Ok(out)
+}
+
+fn app_list_cache_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    #[cfg(target_os = "macos")]
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Library").join("Caches"));
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".cache"))
+        });
+
+    base.map(|base| {
+        base.join("steam-achievement-manager-enhanced")
+            .join("games.xml")
+    })
+}
+
+fn load_cached_app_list(path: &Path) -> Option<Vec<(u32, String)>> {
+    if std::fs::metadata(path).ok()?.len() > APP_LIST_MAX_BYTES {
+        return None;
+    }
+    let body = std::fs::read_to_string(path).ok()?;
+    let list = parse_app_list_with_limit(&body, APP_LIST_MAX_ENTRIES).ok()?;
+    (!list.is_empty()).then_some(list)
+}
+
+fn app_list_cache_is_fresh(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age <= APP_LIST_CACHE_TTL)
+}
+
+fn save_app_list_cache(path: &Path, body: &str) {
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_ok() {
+        // A partial cache is harmless: every read revalidates size, syntax, and entry count
+        // before use, and falls back to the network/bundled candidate list on failure.
+        let _ = std::fs::write(path, body);
+    }
+}
+
+fn download_app_list() -> Result<(String, Vec<(u32, String)>), String> {
+    let response = ureq::get("https://gib.me/sam/games.xml")
+        .timeout(Duration::from_secs(20))
+        .call()
+        .map_err(|e| format!("下載 games.xml 失敗：{e}"))?;
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .take(APP_LIST_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > APP_LIST_MAX_BYTES {
+        return Err(format!(
+            "games.xml 超過 {} MiB 上限",
+            APP_LIST_MAX_BYTES / 1024 / 1024
+        ));
+    }
+    let body = String::from_utf8(bytes).map_err(|_| "games.xml 不是有效 UTF-8".to_string())?;
+    let list = parse_app_list_with_limit(&body, APP_LIST_MAX_ENTRIES)?;
+    if list.is_empty() {
+        Err("games.xml 解析為空".into())
+    } else {
+        Ok((body, list))
+    }
 }
 
 /// Download + parse the SAM master app list (all apps with stats/achievements).
 pub fn fetch_app_list() -> Result<Vec<(u32, String)>, String> {
-    let body = ureq::get("https://gib.me/sam/games.xml")
-        .timeout(std::time::Duration::from_secs(20))
-        .call()
-        .map_err(|e| format!("下載 games.xml 失敗：{e}"))?
-        .into_string()
-        .map_err(|e| e.to_string())?;
-    let list = parse_app_list(&body);
-    if list.is_empty() {
-        Err("games.xml 解析為空".into())
-    } else {
-        Ok(list)
+    let cache_path = app_list_cache_path();
+    let mut cached = cache_path.as_deref().and_then(load_cached_app_list);
+    if cache_path.as_deref().is_some_and(app_list_cache_is_fresh) {
+        if let Some(list) = cached.take() {
+            return Ok(list);
+        }
+    }
+
+    match download_app_list() {
+        Ok((body, list)) => {
+            if let Some(path) = cache_path.as_deref() {
+                save_app_list_cache(path, &body);
+            }
+            Ok(list)
+        }
+        Err(error) => cached.ok_or(error),
     }
 }
 
@@ -458,8 +567,8 @@ fn parse_kv(data: &[u8]) -> Option<Kv> {
 #[cfg(test)]
 mod tests {
     use super::{
-        achievement_write_allowed, choose_account_id, stat_i32_value, stat_value_is_valid,
-        writable_stat_def, StatChange, StatDef,
+        achievement_write_allowed, choose_account_id, parse_app_list_with_limit, stat_i32_value,
+        stat_value_is_valid, writable_stat_def, StatChange, StatDef,
     };
     use std::collections::HashMap;
 
@@ -600,6 +709,27 @@ mod tests {
         let chosen = choose_account_id(accounts, |_| false);
         assert_eq!(chosen, Some(101));
     }
+
+    #[test]
+    fn app_list_deduplicates_ids_and_normalizes_types() {
+        let xml = r#"<games>
+            <game type="demo">10</game>
+            <game type="unexpected">20</game>
+            <game type="mod">10</game>
+            <game>0</game>
+        </games>"#;
+
+        assert_eq!(
+            parse_app_list_with_limit(xml, 10).unwrap(),
+            vec![(10, "demo".into()), (20, String::new())]
+        );
+    }
+
+    #[test]
+    fn app_list_rejects_more_unique_ids_than_the_limit() {
+        let xml = "<game>1</game><game>2</game><game>3</game>";
+        assert!(parse_app_list_with_limit(xml, 2).is_err());
+    }
 }
 
 #[cfg(windows)]
@@ -607,20 +737,22 @@ mod imp {
     use super::{
         achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
         stat_bound, stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid,
-        text_vdf_tokens, writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame,
-        StatChange, StatDef, StatInfo,
+        text_vdf_tokens, writable_stat_def, AchChange, AchievementInfo, GameProgress, GameStats,
+        OwnedGame, StatChange, StatDef, StatInfo,
     };
     use std::ffi::{c_char, c_void, CStr, CString};
-    use std::path::Path;
     use std::time::{Duration, Instant};
 
     #[allow(non_snake_case)]
     extern "system" {
-        fn SetDllDirectoryW(path: *const u16) -> i32;
+        fn AddDllDirectory(path: *const u16) -> *mut c_void;
+        fn RemoveDllDirectory(cookie: *mut c_void) -> i32;
         fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
         fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *const c_void;
     }
-    const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x08;
+    const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
+    const LOAD_LIBRARY_SEARCH_USER_DIRS: u32 = 0x0000_0400;
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
 
     /// k_iSteamUserStatsCallbacks (1100) + 1
     const USER_STATS_RECEIVED: i32 = 1101;
@@ -643,6 +775,32 @@ mod imp {
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    #[derive(Default)]
+    struct DllDirectoryGuard {
+        cookies: Vec<*mut c_void>,
+    }
+
+    impl DllDirectoryGuard {
+        fn add(&mut self, path: &str) -> Result<(), String> {
+            let cookie = unsafe { AddDllDirectory(wide(path).as_ptr()) };
+            if cookie.is_null() {
+                return Err(format!("無法加入 DLL 搜尋目錄：{path}"));
+            }
+            self.cookies.push(cookie);
+            Ok(())
+        }
+    }
+
+    impl Drop for DllDirectoryGuard {
+        fn drop(&mut self) {
+            for cookie in self.cookies.drain(..).rev() {
+                unsafe {
+                    let _ = RemoveDllDirectory(cookie);
+                }
+            }
+        }
     }
 
     unsafe fn cstr(p: *const c_char) -> String {
@@ -756,14 +914,6 @@ mod imp {
         choose_account_id_with_preferred(accounts, preferred, |_| false)
     }
 
-    fn find_account_id_for_game(install: &str, app_id: u32) -> Option<u32> {
-        let accounts = account_ids(install);
-        let preferred = most_recent_account_id(install, &accounts);
-        choose_account_id_with_preferred(accounts, preferred, |account_id| {
-            Path::new(&user_stats_path(install, account_id, app_id)).is_file()
-        })
-    }
-
     /// For each child of `node`, count the children of its `key` sub-node. Sum.
     fn count_children(node: &super::Kv, key: &str) -> u32 {
         node.children
@@ -775,9 +925,12 @@ mod imp {
 
     /// Completion (earned, total) read straight from Steam's local cache files —
     /// NO Steam connection, so it never launches the game.
-    pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
-        let install = install_path()?;
-
+    fn completion_local_with_context(
+        install: &str,
+        accounts: &[u32],
+        preferred: Option<u32>,
+        app_id: u32,
+    ) -> Option<GameProgress> {
         // total = achievement "bits" defined in the schema
         let schema = std::fs::read(format!(
             r"{install}\appcache\stats\UserGameStatsSchema_{app_id}.bin"
@@ -791,10 +944,11 @@ mod imp {
         }
 
         // earned = AchievementTimes entries in the per-user cache
-        let earned = find_account_id_for_game(&install, app_id)
-            .and_then(|account_id| {
-                std::fs::read(user_stats_path(&install, account_id, app_id)).ok()
+        let earned =
+            choose_account_id_with_preferred(accounts.iter().copied(), preferred, |account_id| {
+                std::path::Path::new(&user_stats_path(install, account_id, app_id)).is_file()
             })
+            .and_then(|account_id| std::fs::read(user_stats_path(install, account_id, app_id)).ok())
             .and_then(|d| super::parse_kv(&d))
             .and_then(|kv| {
                 kv.child("cache")
@@ -802,7 +956,34 @@ mod imp {
             })
             .unwrap_or(0);
 
-        Some((earned.min(total), total))
+        Some(GameProgress {
+            app_id,
+            earned: earned.min(total),
+            total,
+        })
+    }
+
+    /// Batch completion scan. Steam root/account discovery is shared across the full
+    /// library instead of repeated once per Tauri command and app id.
+    pub fn completion_local_many(app_ids: &[u32]) -> Vec<GameProgress> {
+        let Some(install) = install_path() else {
+            return Vec::new();
+        };
+        let accounts = account_ids(&install);
+        let preferred = most_recent_account_id(&install, &accounts);
+        app_ids
+            .iter()
+            .copied()
+            .filter_map(|app_id| {
+                completion_local_with_context(&install, &accounts, preferred, app_id)
+            })
+            .collect()
+    }
+
+    pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
+        completion_local_many(&[app_id])
+            .pop()
+            .map(|progress| (progress.earned, progress.total))
     }
 
     // ---- user library categories (parsed from sharedconfig.vdf, a text VDF) ----
@@ -962,15 +1143,16 @@ mod imp {
         apps008: *mut c_void,
         apps001: *mut c_void,
         install: String,
+        _dll_dirs: DllDirectoryGuard,
     }
 
     impl SteamClient {
         pub fn connect() -> Result<Self, String> {
             let install = install_path().ok_or("找不到 Steam 安裝路徑（請確認已安裝 Steam）")?;
+            let mut dll_dirs = DllDirectoryGuard::default();
+            dll_dirs.add(&install)?;
+            dll_dirs.add(&format!(r"{install}\bin"))?;
             unsafe {
-                let search = format!(r"{install};{install}\bin");
-                SetDllDirectoryW(wide(&search).as_ptr());
-
                 // 64-bit process needs steamclient64.dll; the bare one is 32-bit.
                 let dll_name = if cfg!(target_pointer_width = "64") {
                     "steamclient64.dll"
@@ -981,7 +1163,9 @@ mod imp {
                 let module = LoadLibraryExW(
                     wide(&dll).as_ptr(),
                     std::ptr::null_mut(),
-                    LOAD_WITH_ALTERED_SEARCH_PATH,
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+                        | LOAD_LIBRARY_SEARCH_USER_DIRS
+                        | LOAD_LIBRARY_SEARCH_SYSTEM32,
                 );
                 if module.is_null() {
                     return Err(format!("無法載入 {dll}"));
@@ -1033,6 +1217,7 @@ mod imp {
                     apps008,
                     apps001,
                     install,
+                    _dll_dirs: dll_dirs,
                 })
             }
         }
@@ -1660,7 +1845,7 @@ pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
 /// (earned, total) achievement completion read from Steam's local cache files.
 /// Reads files only — no Steam connection — so it never launches the game.
 #[cfg(windows)]
-pub use imp::completion_local;
+pub use imp::{completion_local, completion_local_many};
 
 /// The user's Steam library categories per owned app (from sharedconfig.vdf).
 #[cfg(windows)]
@@ -1677,7 +1862,7 @@ pub fn read_categories() -> Vec<(u32, Vec<String>)> {
 mod imp_macos;
 
 #[cfg(target_os = "macos")]
-pub use imp_macos::{completion_local, read_categories, SteamClient};
+pub use imp_macos::{completion_local, completion_local_many, read_categories, SteamClient};
 
 #[cfg(target_os = "macos")]
 pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
@@ -1746,4 +1931,9 @@ pub fn list_owned() -> Result<Vec<OwnedGame>, String> {
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn completion_local(_app_id: u32) -> Option<(u32, u32)> {
     None
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn completion_local_many(_app_ids: &[u32]) -> Vec<GameProgress> {
+    Vec::new()
 }

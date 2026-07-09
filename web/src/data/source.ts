@@ -27,11 +27,9 @@ export interface SamSource {
   loadGame(appId: string): Promise<Game>
   /** Persist unlock/stat changes (writes to Steam in the Tauri source). */
   saveChanges(appId: string, changes: GameChanges): Promise<SaveResult>
-  /**
-   * Optional: per-game completion for filling the library/sidebar bars without
-   * opening each game. The real source loads these lazily in the background.
-   */
-  loadProgress?(appId: string): Promise<GameCompletion>
+  /** Optional batch completion read for filling library/sidebar bars. Missing app
+   * ids are represented by absent keys and shown as unavailable by the UI. */
+  loadProgressBatch?(appIds: string[]): Promise<Record<string, GameCompletion>>
   /**
    * Optional: the user's own Steam library categories, keyed by app id. Used to
    * filter the sidebar by the player's own organization (real source only).

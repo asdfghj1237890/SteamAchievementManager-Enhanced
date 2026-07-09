@@ -52,11 +52,11 @@ npm test          # vitest (logic + MockSource)
 ```
 
 ### Desktop (real Steam — Phase 2)
-Requires Rust + the Tauri CLI (`cargo install tauri-cli`). **Steam must be
-running and logged in.**
+Requires Rust; `npm install` supplies the lockfile-pinned Tauri CLI. **Steam must
+be running and logged in.**
 ```bash
 cd web
-cargo tauri dev   # builds src-tauri + loads the Vite UI in a desktop window
+npm run tauri -- dev   # builds src-tauri + loads the Vite UI in a desktop window
 ```
 
 Supported live today on **Windows** and **macOS / Apple Silicon**: list games,

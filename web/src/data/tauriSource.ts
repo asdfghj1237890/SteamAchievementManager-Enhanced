@@ -40,6 +40,12 @@ interface RawGameStats {
   stats: RawStat[]
 }
 
+interface RawProgress {
+  app_id: number
+  earned: number
+  total: number
+}
+
 /** Stable cover hue derived from the app id (no genre/hue from the apps interface). */
 const hueFor = (appId: number): number => (appId * 47) % 360
 
@@ -106,10 +112,20 @@ export class TauriSource implements SamSource {
     return { saved: r.saved }
   }
 
-  async loadProgress(appId: string): Promise<GameCompletion> {
-    const r = await invoke<{ earned: number; total: number }>('game_progress', { appId })
-    const pct = r.total ? Math.round((r.earned / r.total) * 100) : 0
-    return { earned: r.earned, total: r.total, pct }
+  async loadProgressBatch(appIds: string[]): Promise<Record<string, GameCompletion>> {
+    const numericAppIds = appIds
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0 && id <= 0xffff_ffff)
+    const rows = await invoke<RawProgress[]>('game_progress_many', { appIds: numericAppIds })
+    const progress: Record<string, GameCompletion> = {}
+    for (const row of rows) {
+      progress[String(row.app_id)] = {
+        earned: row.earned,
+        total: row.total,
+        pct: row.total ? Math.round((row.earned / row.total) * 100) : 0,
+      }
+    }
+    return progress
   }
 
   async loadCategories(): Promise<Record<string, string[]>> {

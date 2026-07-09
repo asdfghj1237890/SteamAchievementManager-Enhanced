@@ -5,11 +5,10 @@
 use super::{
     achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
     stat_bound, stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid,
-    writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatDef,
-    StatInfo,
+    writable_stat_def, AchChange, AchievementInfo, GameProgress, GameStats, OwnedGame, StatChange,
+    StatDef, StatInfo,
 };
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[allow(non_snake_case)]
@@ -107,14 +106,6 @@ fn find_account_id(root: &str) -> Option<u32> {
     choose_account_id_with_preferred(accounts, preferred, |_| false)
 }
 
-fn find_account_id_for_game(root: &str, app_id: u32) -> Option<u32> {
-    let accounts = account_ids(root);
-    let preferred = most_recent_account_id(root, &accounts);
-    choose_account_id_with_preferred(accounts, preferred, |account_id| {
-        Path::new(&user_stats_path(root, account_id, app_id)).is_file()
-    })
-}
-
 fn resolve_stat_type(stat: &super::Kv) -> u8 {
     let raw = stat
         .child("type")
@@ -173,10 +164,13 @@ fn count_children(node: &super::Kv, key: &str) -> u32 {
 
 /// Completion (earned, total) read straight from Steam's local cache files —
 /// NO Steam connection, so it never launches the game.
-pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
-    let root = steam_root()?;
-
-    let schema = std::fs::read(schema_path(&root, app_id)).ok()?;
+fn completion_local_with_context(
+    root: &str,
+    accounts: &[u32],
+    preferred: Option<u32>,
+    app_id: u32,
+) -> Option<GameProgress> {
+    let schema = std::fs::read(schema_path(root, app_id)).ok()?;
     let schema_kv = super::parse_kv(&schema)?;
     let stats = schema_kv.child(&app_id.to_string())?.child("stats")?;
     let total = count_children(stats, "bits");
@@ -184,8 +178,11 @@ pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
         return None;
     }
 
-    let earned = find_account_id_for_game(&root, app_id)
-        .and_then(|account_id| std::fs::read(user_stats_path(&root, account_id, app_id)).ok())
+    let earned =
+        choose_account_id_with_preferred(accounts.iter().copied(), preferred, |account_id| {
+            std::path::Path::new(&user_stats_path(root, account_id, app_id)).is_file()
+        })
+        .and_then(|account_id| std::fs::read(user_stats_path(root, account_id, app_id)).ok())
         .and_then(|d| super::parse_kv(&d))
         .and_then(|kv| {
             kv.child("cache")
@@ -193,7 +190,31 @@ pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
         })
         .unwrap_or(0);
 
-    Some((earned.min(total), total))
+    Some(GameProgress {
+        app_id,
+        earned: earned.min(total),
+        total,
+    })
+}
+
+/// Batch completion scan with one Steam root/account discovery for the library.
+pub fn completion_local_many(app_ids: &[u32]) -> Vec<GameProgress> {
+    let Some(root) = steam_root() else {
+        return Vec::new();
+    };
+    let accounts = account_ids(&root);
+    let preferred = most_recent_account_id(&root, &accounts);
+    app_ids
+        .iter()
+        .copied()
+        .filter_map(|app_id| completion_local_with_context(&root, &accounts, preferred, app_id))
+        .collect()
+}
+
+pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
+    completion_local_many(&[app_id])
+        .pop()
+        .map(|progress| (progress.earned, progress.total))
 }
 
 /// The user's library categories per app, parsed from the modern Steam Collections
