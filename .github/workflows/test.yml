@@ -109,10 +109,10 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test Tauri shell
         working-directory: web/src-tauri
-        run: cargo test --all-targets --all-features
+        run: cargo test --workspace --all-targets --all-features
       - name: Lint Tauri shell
         working-directory: web/src-tauri
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Build the native debug executable
         working-directory: web
         run: npm run tauri -- build --debug --no-bundle --ci
@@ -136,5 +136,18 @@ jobs:
             web/src-tauri -> target
       - name: Install pinned cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
-      - run: cargo audit --file web/steam-core/Cargo.lock
-      - run: cargo audit --file web/src-tauri/Cargo.lock
+      - run: cargo audit --deny warnings --file web/steam-core/Cargo.lock
+      - run: cargo audit --deny warnings --file web/src-tauri/Cargo.lock
+      - name: Verify GTK advisory exceptions stay outside supported targets
+        shell: bash
+        run: |
+          cargo tree --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --depth 0
+          cargo tree --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin --depth 0
+          if cargo tree --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
+            echo "GTK3 advisory exception became reachable on Windows" >&2
+            exit 1
+          fi
+          if cargo tree --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
+            echo "GTK3 advisory exception became reachable on macOS" >&2
+            exit 1
+          fi

@@ -61,8 +61,8 @@ cargo fmt --manifest-path steam-core/Cargo.toml --all -- --check
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo test --manifest-path steam-core/Cargo.toml --all-targets --all-features
 cargo clippy --manifest-path steam-core/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features
+cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features -- -D warnings
 
 npm run tauri -- build --debug --no-bundle --ci
 npm run smoke:native
@@ -85,6 +85,15 @@ dispatch, and as a required release gate:
 
 All third-party GitHub Actions use immutable commit SHAs and all test jobs have
 read-only repository permissions.
+
+Rust dependency warnings are denied in CI. The only advisory exceptions are
+listed individually in `.cargo/audit.toml`: they are Tauri's `cfg(linux)` GTK3
+backend, which Cargo records in the cross-platform lockfile but this project
+does not build or release. CI also fails if those crates ever become reachable
+from the Windows or macOS target graphs. Tauri's former `urlpattern` 0.3
+implementation is bridged to maintained 0.6 so its five unmaintained UNIC
+crates are absent from the lockfile. Remove the GTK3 exceptions when upstream
+Tauri migrates its Linux backend, or before adding Linux as a supported target.
 
 ## Steam safety boundary
 

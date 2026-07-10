@@ -18,8 +18,8 @@
     "test:a11y": "playwright test --project=chromium --grep @a11y",
     "smoke:native": "node scripts/native-smoke.mjs",
     "test:web": "npm run typecheck && npm run test:coverage && npm run build && npm run test:e2e",
-    "test:rust": "cargo test --manifest-path steam-core/Cargo.toml --all-targets --all-features && cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features",
-    "lint:rust": "cargo fmt --manifest-path steam-core/Cargo.toml --all -- --check && cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --manifest-path steam-core/Cargo.toml --all-targets --all-features -- -D warnings && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
+    "test:rust": "cargo test --manifest-path steam-core/Cargo.toml --all-targets --all-features && cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features",
+    "lint:rust": "cargo fmt --manifest-path steam-core/Cargo.toml --all -- --check && cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --manifest-path steam-core/Cargo.toml --all-targets --all-features -- -D warnings && cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features -- -D warnings",
     "test:native": "npm run tauri -- build --debug --no-bundle --ci && npm run smoke:native",
     "test:all": "npm run test:web && npm run test:rust && npm run lint:rust && npm run test:native"
   },
