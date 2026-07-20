@@ -30,7 +30,10 @@ export default function AchIcon({
             width: '100%',
             height: '100%',
             objectFit: 'cover',
-            display: loaded ? 'block' : 'none',
+            // opacity, not display:none — a boxless lazy image never intersects the
+            // viewport, so it would never load and onLoad could never reveal it.
+            opacity: loaded ? 1 : 0,
+            transition: 'opacity .35s',
           }}
         />
       )}
