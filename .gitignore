@@ -409,5 +409,10 @@ docs/superpowers/
 # Local-only working notes (Claude Code) — personal scratch, not shared.
 CLAUDE.local.md
 
+# Per-machine Claude Code config: settings.local.json (permission overrides),
+# launch.json (dev-server command), and the rest of the agent's local state.
+# CLAUDE.md at the repo root is the shared part and stays tracked.
+.claude/
+
 # macOS Finder metadata
 .DS_Store
