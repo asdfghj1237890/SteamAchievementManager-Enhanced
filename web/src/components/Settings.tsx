@@ -64,6 +64,7 @@ export default function Settings() {
           <select
             value={state.lang}
             onChange={(e) => set({ lang: e.target.value as Lang })}
+            aria-label={t('settings.language')}
             style={{
               padding: '8px 12px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
               background: 'var(--s0)', color: 'var(--t1)', fontSize: '13px', fontFamily: 'inherit',

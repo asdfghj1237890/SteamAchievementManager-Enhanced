@@ -11,11 +11,11 @@ interface SegProps {
 }
 
 /** Segmented / pill button matching the design's segBase / segOn styling, with a subtle hover. */
-export default function Seg({ active = false, onClick, children, style, title }: SegProps) {
+export default function Seg({ active, onClick, children, style, title }: SegProps) {
   const { hover, hoverProps } = useHover()
-  const merged: CSSProperties = { ...(active ? segOn : segBase), ...style }
+  const merged: CSSProperties = { ...(active === true ? segOn : segBase), ...style }
   if (hover) {
-    if (active) {
+    if (active === true) {
       merged.filter = 'brightness(1.06)'
     } else {
       merged.color = 'var(--t1)'
@@ -23,7 +23,14 @@ export default function Seg({ active = false, onClick, children, style, title }:
     }
   }
   return (
-    <button type="button" title={title} onClick={onClick} style={merged} {...hoverProps}>
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      aria-pressed={active === undefined ? undefined : active}
+      style={merged}
+      {...hoverProps}
+    >
       {children}
     </button>
   )

@@ -34,7 +34,24 @@ export default function Resizer() {
     <div
       onMouseDown={onMouseDown}
       onDoubleClick={() => set({ sidebarWidth: 280 })}
+      onKeyDown={(e) => {
+        let next = state.sidebarWidth
+        if (e.key === 'ArrowLeft') next -= 8
+        else if (e.key === 'ArrowRight') next += 8
+        else if (e.key === 'Home') next = 220
+        else if (e.key === 'End') next = 520
+        else return
+        e.preventDefault()
+        set({ sidebarWidth: clampSidebar(next) })
+      }}
       title={t('resizer.tooltip')}
+      role="separator"
+      tabIndex={0}
+      aria-label={t('resizer.tooltip')}
+      aria-orientation="vertical"
+      aria-valuemin={220}
+      aria-valuemax={520}
+      aria-valuenow={state.sidebarWidth}
       style={{
         width: '7px',
         margin: '0 -3px',

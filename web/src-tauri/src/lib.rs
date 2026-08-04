@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::process::Command;
 use std::time::{Duration, Instant};
-use steam_core::{AchChange, OwnedGame, StatChange};
+use steam_core::{AchChange, GameProgress, OwnedGame, StatChange};
 
 const WORKER_TIMEOUT_SECS: u64 = 45;
 
@@ -162,30 +162,30 @@ async fn save_changes(app_id: String, changes: GameChanges) -> Result<serde_json
     .map_err(|e| e.to_string())?
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Progress {
-    earned: u32,
-    total: u32,
-}
-
-/// Light achievement completion for one game (used to fill the list bars).
+/// Light achievement completion for the library (used to fill list bars).
 ///
 /// Reads Steam's local cache files directly — it opens NO Steam interface and
 /// sets NO SteamAppId, so (unlike a per-game worker) it never makes Steam think
 /// the game is running and never triggers a cloud sync. This is SAM's approach:
 /// completion comes from the on-disk stats cache, not from launching the game.
-/// Games with no local cache return an error, so the list shows "—" for them.
+/// Games with no local cache are omitted, so the list shows "—" for them. A single
+/// batch shares Steam root/account discovery across every app id.
 #[tauri::command]
-async fn game_progress(app_id: String) -> Result<Progress, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Progress, String> {
-        let id: u32 = app_id.parse().map_err(|_| "無效的 appId".to_string())?;
-        match steam_core::completion_local(id) {
-            Some((earned, total)) => Ok(Progress { earned, total }),
-            None => Err("本機沒有此遊戲的成就快取".into()),
-        }
+async fn game_progress_many(app_ids: Vec<u32>) -> Result<Vec<GameProgress>, String> {
+    const MAX_APP_IDS: usize = 100_000;
+    if app_ids.len() > MAX_APP_IDS {
+        return Err(format!("appId 數量超過 {MAX_APP_IDS} 筆上限"));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut seen = HashSet::with_capacity(app_ids.len());
+        let unique: Vec<u32> = app_ids
+            .into_iter()
+            .filter(|id| *id != 0 && seen.insert(*id))
+            .collect();
+        steam_core::completion_local_many(&unique)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -340,7 +340,7 @@ pub fn run() {
             list_games,
             load_game,
             save_changes,
-            game_progress,
+            game_progress_many,
             game_categories,
             game_header,
             latest_version,
@@ -348,4 +348,26 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_worker;
+
+    #[test]
+    fn worker_rejects_missing_or_invalid_app_id_without_connecting_to_steam() {
+        assert_eq!(run_worker(&[]).unwrap_err(), "worker：缺少有效的 appId");
+        assert_eq!(
+            run_worker(&["read".into(), "not-a-number".into()]).unwrap_err(),
+            "worker：缺少有效的 appId"
+        );
+    }
+
+    #[test]
+    fn worker_rejects_unknown_mode_without_connecting_to_steam() {
+        assert_eq!(
+            run_worker(&["invalid-smoke-mode".into(), "1".into()]).unwrap_err(),
+            "worker：未知模式 invalid-smoke-mode"
+        );
+    }
 }

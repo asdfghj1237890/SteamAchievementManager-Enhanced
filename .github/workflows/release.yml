@@ -17,16 +17,21 @@ on:
         default: 'v1.0.0'
 
 permissions:
-  contents: write # required to create the GitHub Release
+  contents: read
 
 jobs:
+  # Releases reuse the same full test matrix as pull requests, so a tag cannot
+  # publish by bypassing browser, Rust, accessibility, or native smoke gates.
+  quality:
+    uses: ./.github/workflows/test.yml
+
   # Fail fast if the git tag and the app's own version (what getVersion() reports)
   # disagree — otherwise a release built without bumping the version files would
   # immediately nag users to "update" to the version they just installed.
   verify-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Tag must match the app version
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
@@ -40,17 +45,19 @@ jobs:
           echo "version OK: $want"
 
   build-windows:
-    needs: [verify-version]
+    needs: [verify-version, quality]
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: web/src-tauri -> target
       - name: Install frontend dependencies
@@ -61,26 +68,28 @@ jobs:
       - name: Build portable executable (release, no installer)
         working-directory: web
         shell: bash
-        run: npx --yes '@tauri-apps/cli@^2' build --no-bundle
+        run: npm run tauri -- build --no-bundle
       - name: Upload exe artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-exe
           path: web/src-tauri/target/release/app.exe
           if-no-files-found: error
 
   build-macos:
-    needs: [verify-version]
+    needs: [verify-version, quality]
     runs-on: macos-latest # Apple Silicon (arm64)
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: web/src-tauri -> target
       - name: Install frontend dependencies
@@ -90,9 +99,9 @@ jobs:
       # aarch64-apple-darwin, so this is an Apple Silicon build.
       - name: Build .dmg (release, Apple Silicon)
         working-directory: web
-        run: npx --yes '@tauri-apps/cli@^2' build --bundles dmg
+        run: npm run tauri -- build --bundles dmg
       - name: Upload dmg artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-dmg
           path: web/src-tauri/target/release/bundle/dmg/*.dmg
@@ -101,9 +110,11 @@ jobs:
   release:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts # -> artifacts/windows-exe/app.exe, artifacts/macos-dmg/*.dmg
 
@@ -145,13 +156,15 @@ jobs:
   bump-latest-json:
     needs: [release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     # Serialize latest.json updates so concurrent/overlapping release runs can't
     # race each other when pushing the pointer.
     concurrency:
       group: latest-json
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: master
       - name: Write latest.json from the release tag and push (monotonic)

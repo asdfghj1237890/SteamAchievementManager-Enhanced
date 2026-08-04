@@ -1,0 +1,26 @@
+# Tauri 2.11.5 still resolves its Linux WebKit backend through the unmaintained
+# gtk-rs GTK3 bindings. This application only builds/releases Windows and macOS,
+# so those cfg(linux) crates are present in Cargo.lock but never compiled into a
+# supported artifact. Keep each exception explicit: all new warnings, yanks,
+# unsoundness, and vulnerabilities continue to fail the audit.
+[advisories]
+ignore = [
+  "RUSTSEC-2024-0370", # proc-macro-error, via Linux-only glib-macros/gtk3-macros
+  "RUSTSEC-2024-0411", # gdkwayland-sys (GTK3, Linux-only)
+  "RUSTSEC-2024-0412", # gdk (GTK3, Linux-only)
+  "RUSTSEC-2024-0413", # atk (GTK3, Linux-only)
+  "RUSTSEC-2024-0414", # gdkx11-sys (GTK3, Linux-only)
+  "RUSTSEC-2024-0415", # gtk (GTK3, Linux-only)
+  "RUSTSEC-2024-0416", # atk-sys (GTK3, Linux-only)
+  "RUSTSEC-2024-0417", # gdkx11 (GTK3, Linux-only)
+  "RUSTSEC-2024-0418", # gdk-sys (GTK3, Linux-only)
+  "RUSTSEC-2024-0419", # gtk3-macros (GTK3, Linux-only)
+  "RUSTSEC-2024-0420", # gtk-sys (GTK3, Linux-only)
+  "RUSTSEC-2024-0429", # glib 0.18 unsound API, Linux-only in this dependency graph
+]
+
+[output]
+deny = ["warnings"]
+format = "terminal"
+quiet = false
+show_tree = true

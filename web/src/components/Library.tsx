@@ -44,6 +44,7 @@ function LibraryCard({ g }: { g: GameSummary }) {
       role="button"
       tabIndex={0}
       aria-label={g.name}
+      data-testid={`library-game-${g.appId}`}
       style={cardStyle}
       {...activate(() => selectGame(g.appId))}
       {...hoverProps}
@@ -102,6 +103,7 @@ export default function Library() {
     <div
       ref={virtual.containerRef}
       onScroll={virtual.onScroll}
+      data-testid="library-screen"
       style={{ flex: 1, overflowY: 'auto', padding: '22px 24px 26px', minHeight: 0 }}
     >
       <div style={{ marginBottom: '18px' }}>

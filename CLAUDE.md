@@ -18,6 +18,14 @@
 
 ## Recently Fixed
 
+- **(2026-08-04 merge origin/master ← 1.2.5-era batch)** 本機那批 1.2.5 時代的修復與遠端 1.2.6/1.2.7 線（批次 library 掃描、自動化測試框架、圖片 lazy-load 修復）合併。7 個檔衝突，取捨如下，**後續不要再「二選一」地回頭改**：
+  - **partial-save 保留兩層，不是二選一**：Rust `WriteResult { saved, rejected }` 當偵測訊號（`AppContext` 的 `res.rejected.length > 0`），遠端的 `applyPartialSave` 當狀態合流（能保住存檔期間使用者新做的編輯）。兩邊當初獨立收斂到同一設計，所以寫入路徑幾乎自動併乾淨。
+  - **completion 載入器**：採遠端的單次批次 API `loadProgressBatch`（取代原本 3-worker 逐一 `loadProgress`），但把「跳過已載入詳情的遊戲」過濾器接回去——少了它，側欄完成度會被磁碟快取覆蓋而閃動。
+  - **鍵盤操作**：統一用 `lib/a11y.ts` 的 `activate()` helper（語意與遠端 inline handler 等價），同時保留遠端的 `data-testid`（`App.ui.test.tsx` 靠它抓元素）與較完整的 `aria-label`（含 `stateText`）。
+  - **Rust import**：`GameProgress`（遠端 `game_progress_many` 在用）與 `WriteResult`（寫入路徑在用）都還活著，取聯集。
+  - **v7 遷移點**：`HashRouter` 的 `future={{ v7_startTransition, v7_relativeSplatPath }}` 是 v6 opt-in flag，v7 已成預設且該 prop 不再接受，`main.tsx` 與 `App.ui.test.tsx` 各刪一處。
+  - **兩個測試更新為合併後契約**：`tauriSource.test.ts` 的 `saveChanges` 預期補上 `rejected: []`；`App.ui.test.tsx` 的旅程在離開有未存編輯的遊戲時補一步確認離開（順帶把未存變更守衛納入覆蓋）。
+  - 驗證：`npm run build` 乾淨、`npm test` 58 pass（12 檔）、steam-core `cargo test` 9 pass + clippy、src-tauri workspace test + clippy 全綠、dev server 實跑路由與 catch-all 無 console 錯誤。
 - **(2026-08-04 Dependabot 依賴更新)** 清掉當時 4 個 open alerts（#7 #8 #9 #10）：
   - `postcss` 8.5.15 → 8.5.25（dev-only，經 vite 傳遞；順帶吃掉 npm advisory DB 多列的 `GHSA-fxqj-rqcc-2cmp`）。lockfile 內版本提升，vite 8.0.16 要的是 `^8.5.15`，無破壞性。
   - `react-router-dom` 6.30.4 → 7.18.2。**原始碼零改動**——v7 的 `react-router-dom` 只是 `react-router` 的 re-export shim，8 處 import 原封不動通過 `tsc -b`。專案用宣告式 `HashRouter`，v7 那些 future flags 只影響 data router / splat 相對路由，皆未使用。6.x 對 `GHSA-jjmj-jmhj-qwj2` 永遠不會有 patch，所以只能上 v7。

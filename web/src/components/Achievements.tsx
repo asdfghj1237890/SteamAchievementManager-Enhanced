@@ -80,7 +80,7 @@ export default function Achievements() {
   const storeStyle: CSSProperties = {
     padding: '8px 18px', borderRadius: 'var(--radius)',
     border: '1px solid ' + (pending > 0 ? 'var(--accent)' : 'var(--bd)'),
-    background: pending > 0 ? 'var(--accent)' : 'var(--s2)', color: pending > 0 ? '#fff' : 'var(--t3)',
+    background: pending > 0 ? 'var(--accent)' : 'var(--s2)', color: pending > 0 ? 'var(--accent-ink)' : 'var(--t3)',
     cursor: pending > 0 ? 'pointer' : 'default', fontSize: '13px', fontWeight: 700, fontFamily: 'inherit',
     boxShadow: pending > 0 ? '0 4px 14px -4px var(--accent)' : 'none', transition: 'all .15s',
   }
@@ -95,6 +95,7 @@ export default function Achievements() {
             value={state.achSearch}
             onChange={(e) => set({ achSearch: e.target.value })}
             placeholder={t('ach.search')}
+            aria-label={t('ach.search')}
             style={{ flex: 1, border: 'none', background: 'transparent', color: 'var(--t1)', fontSize: '13px', outline: 'none', width: '100%' }}
           />
         </div>
@@ -173,7 +174,7 @@ export default function Achievements() {
               }}
             >
               {views.map((ach) => (
-                <div key={ach.id} style={{ ...ach.cardStyle, height: GRID_CARD_HEIGHT, boxSizing: 'border-box', overflow: 'hidden' }}>
+                <div key={ach.id} data-testid={`achievement-${ach.id}`} style={{ ...ach.cardStyle, height: GRID_CARD_HEIGHT, boxSizing: 'border-box', overflow: 'hidden' }}>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
                     <AchIcon url={ach.iconUrl} style={ach.iconGrid} letter={ach.icon} />
                     <div style={{ flex: 1, minWidth: 0, paddingTop: '1px' }}>
@@ -191,7 +192,7 @@ export default function Achievements() {
                     <div
                       role="button"
                       tabIndex={0}
-                      aria-label={ach.name}
+                      aria-label={`${ach.name}: ${ach.stateText}`}
                       aria-disabled={ach.protected}
                       style={ach.checkStyle}
                       {...activate(() => toggleAch(g.id, ach.id, ach.protected))}
@@ -222,8 +223,9 @@ export default function Achievements() {
                   key={ach.id}
                   role="button"
                   tabIndex={0}
-                  aria-label={ach.name}
+                  aria-label={`${ach.name}: ${ach.stateText}`}
                   aria-disabled={ach.protected}
+                  data-testid={`achievement-${ach.id}`}
                   style={{ ...ach.rowStyle, height: LIST_ROW_HEIGHT, boxSizing: 'border-box' }}
                   {...activate(() => toggleAch(g.id, ach.id, ach.protected))}
                 >

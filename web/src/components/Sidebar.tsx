@@ -121,6 +121,7 @@ export default function Sidebar() {
         role="button"
         tabIndex={0}
         aria-label={g.name}
+        data-testid={`sidebar-game-${g.appId}`}
         style={rowStyle}
         {...activate(() => selectGame(g.appId))}
       >
@@ -153,6 +154,14 @@ export default function Sidebar() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '11px' }}>
           <span
             onClick={openLibrary}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openLibrary()
+              }
+            }}
+            role="button"
+            tabIndex={0}
             style={{
               fontSize: '12px', fontWeight: 700, letterSpacing: '.4px', cursor: 'pointer',
               fontFamily: 'var(--meta)', color: onLibrary ? 'var(--accent)' : 'var(--t2)',
@@ -175,6 +184,7 @@ export default function Sidebar() {
             value={state.gameSearch}
             onChange={(e) => set({ gameSearch: e.target.value })}
             placeholder={t('sidebar.searchGames')}
+            aria-label={t('sidebar.searchGames')}
             style={inputBase}
           />
         </div>
@@ -253,6 +263,7 @@ export default function Sidebar() {
             }}
             placeholder={t('sidebar.addPlaceholder')}
             aria-invalid={addError}
+            aria-label={t('sidebar.addPlaceholder')}
             style={{
               flex: 1, padding: '7px 10px', borderRadius: 'var(--radius)',
               border: '1px solid ' + (addError ? 'var(--danger)' : 'var(--bd)'),
@@ -261,6 +272,7 @@ export default function Sidebar() {
           />
           <button
             onClick={onAdd}
+            aria-label={t('sidebar.addPlaceholder')}
             style={{
               padding: '7px 13px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
               background: 'var(--s2)', color: 'var(--t1)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
@@ -281,6 +293,7 @@ export default function Sidebar() {
           </button>
           <button
             onClick={() => (onSettings ? openLibrary() : openSettings())}
+            data-testid="settings-toggle"
             style={{
               padding: '8px 12px', borderRadius: 'var(--radius)', flex: '0 0 auto',
               border: '1px solid ' + (onSettings ? 'color-mix(in srgb, var(--accent) 45%, var(--bd))' : 'var(--bd)'),

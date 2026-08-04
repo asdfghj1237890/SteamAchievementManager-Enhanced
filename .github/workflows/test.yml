@@ -1,0 +1,153 @@
+name: Test
+
+on:
+  workflow_call:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend unit, coverage, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run build
+      - run: npm audit
+
+  browser:
+    name: UI, smoke, and accessibility (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Install the lockfile-pinned Playwright browser
+        run: npm exec -- playwright install --with-deps ${{ matrix.browser }}
+      - run: npm run test:e2e -- --project=${{ matrix.browser }}
+      - name: Upload browser diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-${{ matrix.browser }}
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  native:
+    name: Rust and native smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.96.0
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            web/steam-core -> target
+            web/src-tauri -> target
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+      - name: Check Rust formatting
+        working-directory: web
+        run: cargo fmt --manifest-path steam-core/Cargo.toml --all -- --check
+      - name: Check Tauri formatting
+        working-directory: web
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - name: Test steam-core
+        working-directory: web/steam-core
+        run: cargo test --all-targets --all-features
+      - name: Lint steam-core
+        working-directory: web/steam-core
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test Tauri shell
+        working-directory: web/src-tauri
+        run: cargo test --workspace --all-targets --all-features
+      - name: Lint Tauri shell
+        working-directory: web/src-tauri
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build the native debug executable
+        working-directory: web
+        run: npm run tauri -- build --debug --no-bundle --ci
+      - name: Smoke-test native worker dispatch
+        working-directory: web
+        run: npm run smoke:native
+
+  rust-security:
+    name: Rust dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            web/steam-core -> target
+            web/src-tauri -> target
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit --deny warnings --file web/steam-core/Cargo.lock
+      - run: cargo audit --deny warnings --file web/src-tauri/Cargo.lock
+      - name: Verify GTK advisory exceptions stay outside supported targets
+        shell: bash
+        run: |
+          cargo tree --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --depth 0
+          cargo tree --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin --depth 0
+          if cargo tree --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
+            echo "GTK3 advisory exception became reachable on Windows" >&2
+            exit 1
+          fi
+          if cargo tree --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
+            echo "GTK3 advisory exception became reachable on macOS" >&2
+            exit 1
+          fi

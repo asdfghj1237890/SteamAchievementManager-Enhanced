@@ -45,18 +45,60 @@ achievements/stats when opened), mirroring SAM's picker → manager flow.
 ### Web (demo data — fully working today)
 ```bash
 cd web
-npm install
+npm ci
 npm run dev       # http://localhost:5173
 npm run build     # tsc -b + vite build
-npm test          # vitest (logic + MockSource)
+npm test          # fast Vitest unit + integration suite
 ```
 
-### Desktop (real Steam — Phase 2)
-Requires Rust + the Tauri CLI (`cargo install tauri-cli`). **Steam must be
-running and logged in.**
+## Automated testing
+
+The automated framework covers every non-destructive layer of the modern app.
+It intentionally never writes to a real Steam account.
+
+| Layer | Coverage |
+|---|---|
+| Unit / integration | Vitest tests for domain/state logic, `MockSource`, Tauri IPC mapping, and a full React route/edit journey |
+| Coverage gate | V8 coverage with minimum 85% statements/functions/lines and 70% branches for core data, logic, and state modules |
+| Browser UI | Playwright runs the same smoke and editing journeys in Chromium, Firefox, and WebKit |
+| Accessibility | axe-core checks Library, game detail, Statistics, and Settings against WCAG 2 A/AA and WCAG 2.1 A/AA |
+| Runtime health | Every browser test fails on uncaught page exceptions or `console.error` |
+| Rust | `cargo test` and warning-free Clippy for both `steam-core` and the Tauri shell on Windows and macOS |
+| Native smoke | Builds the real Tauri debug executable and exercises headless worker dispatch without connecting to or writing Steam |
+| Supply chain | Full `npm audit` plus pinned `cargo-audit` checks for both Rust lockfiles |
+
+Common local commands:
+
 ```bash
 cd web
-cargo tauri dev   # builds src-tauri + loads the Vite UI in a desktop window
+npm ci
+npm run test:web       # typecheck + coverage + web build + all browser tests
+npm run test:all       # complete web + Rust + clippy + native build/smoke suite
+npm run test:e2e:smoke # quick Chromium smoke tests
+npm run test:a11y      # quick Chromium axe checks
+
+# One-time local browser installation after npm ci
+npm exec -- playwright install chromium firefox webkit
+
+# Native smoke (safe: invalid worker mode, no Steam read/write)
+npm run tauri -- build --debug --no-bundle --ci
+npm run smoke:native
+```
+
+GitHub Actions runs the browser engines independently, runs tests and Clippy for
+both Rust crates on Windows and macOS, builds and smokes the native executable on
+both platforms, and uploads Playwright failure traces/screenshots/videos. The release
+workflow calls this same complete matrix before either release build may publish.
+
+See [`TESTING.md`](TESTING.md) for the full command matrix, diagnostics, test
+placement conventions, and explicit Steam safety boundary.
+
+### Desktop (real Steam — Phase 2)
+Requires Rust; `npm ci` supplies the lockfile-pinned Tauri CLI. **Steam must
+be running and logged in.**
+```bash
+cd web
+npm run tauri -- dev   # builds src-tauri + loads the Vite UI in a desktop window
 ```
 
 Supported live today on **Windows** and **macOS / Apple Silicon**: list games,
