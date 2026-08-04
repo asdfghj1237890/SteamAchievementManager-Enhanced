@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { visibleSummaries } from '../lib/library'
 import { useVirtualScroll, virtualRange } from '../lib/virtual'

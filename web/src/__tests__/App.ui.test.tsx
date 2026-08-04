@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { HashRouter } from 'react-router-dom'
+import { HashRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { MockSource } from '../data/mockSource'

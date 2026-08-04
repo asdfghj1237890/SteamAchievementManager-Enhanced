@@ -1,5 +1,5 @@
 import type { CSSProperties, MouseEvent, ReactNode } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { useHover } from '../lib/useHover'
 import { winClose, winMinimize, winToggleMaximize } from '../lib/appWindow'

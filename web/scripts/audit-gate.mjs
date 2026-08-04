@@ -8,15 +8,15 @@
 
 import { spawnSync } from 'node:child_process'
 
-/** GHSA ids reviewed and accepted, each with the reason it does not apply here. */
-const ALLOWED = new Map([
-  [
-    'GHSA-qwww-vcr4-c8h2',
-    'react-router RSC Mode CSRF — this app is a client-only Tauri SPA on declarative ' +
-      'HashRouter: no RSC plugin, no data router, no loaders/actions, no server. The patched ' +
-      'react-router 8.3.0 requires React >=19.2.7 and drops react-router-dom. See CLAUDE.md.',
-  ],
-])
+/**
+ * GHSA ids reviewed and accepted, each with the reason it does not apply here.
+ *
+ * Empty on purpose: nothing is currently accepted. GHSA-qwww-vcr4-c8h2 (react-router RSC
+ * Mode CSRF) used to sit here while the app was pinned to react-router-dom 7.18.2; moving
+ * to react-router 8.3.0 fixed it outright, so it was dropped rather than kept as an
+ * exception. Prefer fixing over allow-listing.
+ */
+const ALLOWED = new Map()
 
 const res = spawnSync('npm', ['audit', '--json'], {
   encoding: 'utf8',

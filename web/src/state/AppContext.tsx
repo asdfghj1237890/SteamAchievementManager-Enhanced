@@ -2,7 +2,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState,
   type CSSProperties, type ReactNode,
 } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { getSource, isTauri } from '../data'
 import { loadGamesCache, saveGamesCache, saveSettings } from '../data/cache'
 import { translate, type Translate } from '../i18n'

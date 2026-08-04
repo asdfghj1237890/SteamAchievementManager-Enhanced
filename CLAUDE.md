@@ -11,13 +11,18 @@
 ## Current Tracked Concerns
 
 - **[安全/需決策] 更新流程無簽章驗證**（唯一仍開放項）：`latest_version()` 僅抓版本字串、`open_releases()` 開固定 GitHub Releases 頁供手動下載未簽章安裝檔（無 tauri-plugin-updater / pubkey）。需簽章金鑰 + CI 變更，屬 secops 決策，未自動實作。註：`open_releases` URL 為寫死，偽造的 latest.json 只能改顯示的版本字串、無法改下載目的地。
-- **[依賴/已接受風險] react-router 停在 7.18.2，`GHSA-qwww-vcr4-c8h2` 不修**：7.18.0 修掉原本三個 router advisories，但 `7.12.0–8.2.x` 整段落在 RSC Mode CSRF Bypass（high）範圍內；唯一乾淨的 react-router 8.3.0 要求 `react >= 19.2.7`、`node >= 22.22.0`，且 v8 起不再發佈 `react-router-dom`（npm 最新仍是 7.18.2），要升就得連帶做 React 19 + 8 處 import 改 `from 'react-router'`。判定**不可達**：本 app 是 client-only Tauri SPA，`vite.config.ts` 只掛 `@vitejs/plugin-react`（無 RSC plugin），全專案無 `createBrowserRouter`/`RouterProvider`/loader/action、無 server。處置為在 Dependabot 以 `not_used` dismiss。要真正清掉此 alert 須另行決策升 React 19，**不要在沒有使用者指示下自行升級**。註：這個「接受」記在**兩個地方**，改動時要一起改——GitHub Dependabot 的 dismissal，以及 `web/scripts/audit-gate.mjs` 的 `ALLOWED`（GitHub 的 dismiss 不影響 `npm audit`，它讀 npm advisory DB）。
 - **[架構/已評估不做] `SteamClientApi` 統一 trait**：win/mac 的 client contract 其實已由對稱、cfg-gated 的 free functions（`read_game`/`write_game`/`list_owned` 各自呼叫該平台 client 的方法）在編譯期釘住——任一平台方法或簽章 drift 會直接讓該平台的 free function 編譯失敗。額外 trait 只是重複 forwarding boilerplate，不增安全性；stub 刻意精簡（其 free functions 直接回 Err，不經 client 方法）。故不新增。
 
 （原先此處列的 `saved<n` 誤判、completion 雙來源、bulk/reset+關窗未存提醒、aria-label 寫死——皆已於下方 deferred-fix batch 修復。）
 
 ## Recently Fixed
 
+- **(2026-08-04 React 19 + react-router 8)** 使用者指示升級。原本掛在 tracked concerns 的 `GHSA-qwww-vcr4-c8h2`（react-router RSC Mode CSRF）**改為真正修復，不再是「判定不可達所以接受」**：
+  - `react`/`react-dom` 18.3.1 → 19.2.8（含 `@types`）。**零程式碼改動**——沒用到 v19 移除的 `ReactDOM.render`、PropTypes、string refs，`createRoot` 一路沿用。
+  - `react-router-dom` 7.18.2 → `react-router` 8.3.0。v8 起不再發佈 `react-router-dom`（npm 最新永遠停在 7.18.2），所以 9 處 import 全改成 `from 'react-router'`（8 個 src + `App.ui.test.tsx`）。用到的 API（`HashRouter`/`Routes`/`Route`/`Navigate`/`Outlet`/`useParams`/`useNavigate`/`useLocation`）在 v8 簽章不變。
+  - **CI Node 20 → 24**（`test.yml` 3 處 + `release.yml` 2 處）：react-router 8 的 `engines` 要求 `node >= 22.22.0`，不改 CI 會裝到不符引擎的 Node。本機是 24.18.0，選 24 讓 CI 與開發環境一致。
+  - **`audit-gate.mjs` 的 `ALLOWED` 已清空**。腳本內建的「allowlist 過期」偵測正確報出該刪（`npm audit` 不再回報該 advisory）。往後優先修復、而非加入 allowlist。
+  - 驗證：`npm audit` **found 0 vulnerabilities**、typecheck/build 乾淨、`npm test` 58 pass、dev server 實跑（library → game → stats → catch-all 導回 → settings）console 零錯誤。Bundle gzip 97.87 → 110.78 kB。
 - **(2026-08-04 merge origin/master ← 1.2.5-era batch)** 本機那批 1.2.5 時代的修復與遠端 1.2.6/1.2.7 線（批次 library 掃描、自動化測試框架、圖片 lazy-load 修復）合併。7 個檔衝突，取捨如下，**後續不要再「二選一」地回頭改**：
   - **partial-save 保留兩層，不是二選一**：Rust `WriteResult { saved, rejected }` 當偵測訊號（`AppContext` 的 `res.rejected.length > 0`），遠端的 `applyPartialSave` 當狀態合流（能保住存檔期間使用者新做的編輯）。兩邊當初獨立收斂到同一設計，所以寫入路徑幾乎自動併乾淨。
   - **completion 載入器**：採遠端的單次批次 API `loadProgressBatch`（取代原本 3-worker 逐一 `loadProgress`），但把「跳過已載入詳情的遊戲」過濾器接回去——少了它，側欄完成度會被磁碟快取覆蓋而閃動。

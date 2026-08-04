@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router'
 import { AppProvider } from './state/AppContext'
 import AppLayout from './components/AppLayout'
 import Library from './components/Library'

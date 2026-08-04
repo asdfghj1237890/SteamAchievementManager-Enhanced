@@ -1,5 +1,5 @@
 import { useEffect, type CSSProperties } from 'react'
-import { Navigate, Outlet, useParams } from 'react-router-dom'
+import { Navigate, Outlet, useParams } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { useVirtualScroll } from '../lib/virtual'
 import { GameScrollProvider } from './GameScroll'

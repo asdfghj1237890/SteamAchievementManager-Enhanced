@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet } from 'react-router'
 import { useApp } from '../state/AppContext'
 import TitleBar from './TitleBar'
 import Sidebar from './Sidebar'

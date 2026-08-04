@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { completion, points } from '../lib/achievements'
 import { isTauri } from '../data'
