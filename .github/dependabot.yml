@@ -1,0 +1,37 @@
+version: 2
+
+# Legacy WinForms projects (SAM.API/, SAM.Game/, SAM.Picker/) are intentionally
+# not covered — see CLAUDE.md, legacy design concerns are out of scope.
+updates:
+  # React + Vite frontend
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  # Tauri host crate
+  - package-ecosystem: cargo
+    directory: /web/src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # Steam client FFI crate
+  - package-ecosystem: cargo
+    directory: /web/steam-core
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # Release workflow actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
