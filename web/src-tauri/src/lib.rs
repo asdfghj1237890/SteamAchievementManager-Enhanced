@@ -229,10 +229,13 @@ const LATEST_JSON_URL: &str =
 async fn latest_version() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| -> Result<String, String> {
         let body = ureq::get(LATEST_JSON_URL)
-            .timeout(std::time::Duration::from_secs(10))
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
+            .build()
             .call()
             .map_err(|e| e.to_string())?
-            .into_string()
+            .body_mut()
+            .read_to_string()
             .map_err(|e| e.to_string())?;
         let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
         v.get("version")

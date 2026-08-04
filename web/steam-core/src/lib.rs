@@ -121,13 +121,18 @@ fn save_app_list_cache(path: &Path, body: &str) {
 }
 
 fn download_app_list() -> Result<(String, Vec<(u32, String)>), String> {
-    let response = ureq::get("https://gib.me/sam/games.xml")
-        .timeout(Duration::from_secs(20))
+    let mut response = ureq::get("https://gib.me/sam/games.xml")
+        .config()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .build()
         .call()
         .map_err(|e| format!("下載 games.xml 失敗：{e}"))?;
     let mut bytes = Vec::new();
+    // `as_reader` caps at ureq's own 10 MiB default, but APP_LIST_MAX_BYTES is 8 MiB, so the
+    // take() below is what actually bounds the read and the size check stays authoritative.
     response
-        .into_reader()
+        .body_mut()
+        .as_reader()
         .take(APP_LIST_MAX_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
@@ -174,10 +179,13 @@ pub fn fetch_header_url(app_id: u32) -> Option<String> {
     let url =
         format!("https://store.steampowered.com/api/appdetails?appids={app_id}&filters=basic");
     let body = ureq::get(&url)
-        .timeout(std::time::Duration::from_secs(10))
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .build()
         .call()
         .ok()?
-        .into_string()
+        .body_mut()
+        .read_to_string()
         .ok()?;
     let v: serde_json::Value = serde_json::from_str(&body).ok()?;
     let header = v
