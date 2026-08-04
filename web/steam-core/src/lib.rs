@@ -1862,7 +1862,11 @@ pub fn read_game(app_id: u32) -> Result<GameStats, String> {
 
 /// Apply achievement + stat changes and StoreStats. Per-game process.
 #[cfg(windows)]
-pub fn write_game(app_id: u32, ach: &[AchChange], stats: &[StatChange]) -> Result<WriteResult, String> {
+pub fn write_game(
+    app_id: u32,
+    ach: &[AchChange],
+    stats: &[StatChange],
+) -> Result<WriteResult, String> {
     std::env::set_var("SteamAppId", app_id.to_string());
     let client = imp::SteamClient::connect()?;
     client.write_stats(app_id, ach, stats)
@@ -1911,7 +1915,11 @@ pub fn read_game(app_id: u32) -> Result<GameStats, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn write_game(app_id: u32, ach: &[AchChange], stats: &[StatChange]) -> Result<WriteResult, String> {
+pub fn write_game(
+    app_id: u32,
+    ach: &[AchChange],
+    stats: &[StatChange],
+) -> Result<WriteResult, String> {
     std::env::set_var("SteamAppId", app_id.to_string());
     imp_macos::SteamClient::connect()?.write_stats(app_id, ach, stats)
 }

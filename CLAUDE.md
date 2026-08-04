@@ -11,7 +11,7 @@
 ## Current Tracked Concerns
 
 - **[安全/需決策] 更新流程無簽章驗證**（唯一仍開放項）：`latest_version()` 僅抓版本字串、`open_releases()` 開固定 GitHub Releases 頁供手動下載未簽章安裝檔（無 tauri-plugin-updater / pubkey）。需簽章金鑰 + CI 變更，屬 secops 決策，未自動實作。註：`open_releases` URL 為寫死，偽造的 latest.json 只能改顯示的版本字串、無法改下載目的地。
-- **[依賴/已接受風險] react-router 停在 7.18.2，`GHSA-qwww-vcr4-c8h2` 不修**：7.18.0 修掉原本三個 router advisories，但 `7.12.0–8.2.x` 整段落在 RSC Mode CSRF Bypass（high）範圍內；唯一乾淨的 react-router 8.3.0 要求 `react >= 19.2.7`、`node >= 22.22.0`，且 v8 起不再發佈 `react-router-dom`（npm 最新仍是 7.18.2），要升就得連帶做 React 19 + 8 處 import 改 `from 'react-router'`。判定**不可達**：本 app 是 client-only Tauri SPA，`vite.config.ts` 只掛 `@vitejs/plugin-react`（無 RSC plugin），全專案無 `createBrowserRouter`/`RouterProvider`/loader/action、無 server。處置為在 Dependabot 以 `not_used` dismiss。要真正清掉此 alert 須另行決策升 React 19，**不要在沒有使用者指示下自行升級**。
+- **[依賴/已接受風險] react-router 停在 7.18.2，`GHSA-qwww-vcr4-c8h2` 不修**：7.18.0 修掉原本三個 router advisories，但 `7.12.0–8.2.x` 整段落在 RSC Mode CSRF Bypass（high）範圍內；唯一乾淨的 react-router 8.3.0 要求 `react >= 19.2.7`、`node >= 22.22.0`，且 v8 起不再發佈 `react-router-dom`（npm 最新仍是 7.18.2），要升就得連帶做 React 19 + 8 處 import 改 `from 'react-router'`。判定**不可達**：本 app 是 client-only Tauri SPA，`vite.config.ts` 只掛 `@vitejs/plugin-react`（無 RSC plugin），全專案無 `createBrowserRouter`/`RouterProvider`/loader/action、無 server。處置為在 Dependabot 以 `not_used` dismiss。要真正清掉此 alert 須另行決策升 React 19，**不要在沒有使用者指示下自行升級**。註：這個「接受」記在**兩個地方**，改動時要一起改——GitHub Dependabot 的 dismissal，以及 `web/scripts/audit-gate.mjs` 的 `ALLOWED`（GitHub 的 dismiss 不影響 `npm audit`，它讀 npm advisory DB）。
 - **[架構/已評估不做] `SteamClientApi` 統一 trait**：win/mac 的 client contract 其實已由對稱、cfg-gated 的 free functions（`read_game`/`write_game`/`list_owned` 各自呼叫該平台 client 的方法）在編譯期釘住——任一平台方法或簽章 drift 會直接讓該平台的 free function 編譯失敗。額外 trait 只是重複 forwarding boilerplate，不增安全性；stub 刻意精簡（其 free functions 直接回 Err，不經 client 方法）。故不新增。
 
 （原先此處列的 `saved<n` 誤判、completion 雙來源、bulk/reset+關窗未存提醒、aria-label 寫死——皆已於下方 deferred-fix batch 修復。）
@@ -26,6 +26,11 @@
   - **v7 遷移點**：`HashRouter` 的 `future={{ v7_startTransition, v7_relativeSplatPath }}` 是 v6 opt-in flag，v7 已成預設且該 prop 不再接受，`main.tsx` 與 `App.ui.test.tsx` 各刪一處。
   - **兩個測試更新為合併後契約**：`tauriSource.test.ts` 的 `saveChanges` 預期補上 `rejected: []`；`App.ui.test.tsx` 的旅程在離開有未存編輯的遊戲時補一步確認離開（順帶把未存變更守衛納入覆蓋）。
   - 驗證：`npm run build` 乾淨、`npm test` 58 pass（12 檔）、steam-core `cargo test` 9 pass + clippy、src-tauri workspace test + clippy 全綠、dev server 實跑路由與 catch-all 無 console 錯誤。
+  - **本輪教訓：`npm test` 只是 vitest，不等於 CI。** 這個 repo 的 CI 另外把關 `npm run test:e2e`（Playwright，4 個瀏覽器）、`cargo fmt --check`、`npm audit`。第一次推上去 master 就因為這三項全紅。要對齊 CI 請跑 `npm run test:all`（或至少 `test:web` + `lint:rust`），不要只跑 `npm test` 就宣稱綠燈。
+- **(2026-08-04 CI 修復)** 上面那次合併推上去後 CI 三處失敗，已修：
+  - `cargo fmt --check`：`WriteResult` 讓兩個 `write_game` 簽章超過 100 字元，手動解衝突時沒照 rustfmt 換行。
+  - e2e `ui.spec.ts` 的 "edits a stat and persists appearance preferences"：與 vitest 那個同因——未存的統計編輯讓守衛擋住往設定頁的導航，補一步點 Leave。
+  - `npm audit` 關卡：改走新增的 `web/scripts/audit-gate.mjs`（workflow 的 `npm audit` 換成 `node scripts/audit-gate.mjs`）。它跑 `npm audit --json`，只放行 `ALLOWED` 裡列出且附理由的 GHSA，其餘照樣 fail。已驗證：allowlist 清空時 exit 1、有 entry 時 exit 0，不是永遠綠的假關卡。
 - **(2026-08-04 Dependabot 依賴更新)** 清掉當時 4 個 open alerts（#7 #8 #9 #10）：
   - `postcss` 8.5.15 → 8.5.25（dev-only，經 vite 傳遞；順帶吃掉 npm advisory DB 多列的 `GHSA-fxqj-rqcc-2cmp`）。lockfile 內版本提升，vite 8.0.16 要的是 `^8.5.15`，無破壞性。
   - `react-router-dom` 6.30.4 → 7.18.2。**原始碼零改動**——v7 的 `react-router-dom` 只是 `react-router` 的 re-export shim，8 處 import 原封不動通過 `tsc -b`。專案用宣告式 `HashRouter`，v7 那些 future flags 只影響 data router / splat 相對路由，皆未使用。6.x 對 `GHSA-jjmj-jmhj-qwj2` 永遠不會有 patch，所以只能上 v7。

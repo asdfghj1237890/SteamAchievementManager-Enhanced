@@ -33,7 +33,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:coverage
       - run: npm run build
-      - run: npm audit
+      - name: npm audit (accepted advisories listed in scripts/audit-gate.mjs)
+        run: node scripts/audit-gate.mjs
 
   browser:
     name: UI, smoke, and accessibility (${{ matrix.browser }})

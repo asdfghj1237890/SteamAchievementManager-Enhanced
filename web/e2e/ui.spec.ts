@@ -26,7 +26,10 @@ test('edits a stat and persists appearance preferences', async ({ page }) => {
   await firstValue.fill('129')
   await expect(page.getByText('1 modified')).toBeVisible()
 
+  // The stat edit above is unsaved, so leaving the game confirms first.
   await page.getByTestId('settings-toggle').click()
+  await expect(page.getByRole('alertdialog')).toBeVisible()
+  await page.getByRole('button', { name: 'Leave' }).click()
   await page.getByRole('button', { name: /Light/ }).click()
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('sam-settings-v1') ?? '{}').theme)).toBe('light')
 })
