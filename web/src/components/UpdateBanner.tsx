@@ -25,7 +25,7 @@ export default function UpdateBanner() {
       </button>
       <button
         onClick={dismissUpdate}
-        aria-label="dismiss"
+        aria-label={t('a11y.dismiss')}
         style={{
           border: 'none', background: 'transparent', color: 'var(--t3)',
           fontSize: '14px', cursor: 'pointer', lineHeight: 1, padding: '4px',

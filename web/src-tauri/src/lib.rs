@@ -6,6 +6,11 @@ use steam_core::{AchChange, OwnedGame, StatChange};
 
 const WORKER_TIMEOUT_SECS: u64 = 45;
 
+// Upper bound on the candidate app-id list the renderer may pass to `list_games`.
+// The real fallback list is tiny (see web/src/data/steamAppIds.ts); this only caps a
+// compromised webview from forcing millions of serial ownership FFI calls.
+const MAX_CANDIDATE_APP_IDS: usize = 65_536;
+
 fn join_pipe_reader(
     reader: Option<std::thread::JoinHandle<Result<Vec<u8>, String>>>,
 ) -> Result<Vec<u8>, String> {
@@ -20,6 +25,9 @@ fn join_pipe_reader(
 // ---------- list owned games (read-only, in-process) ----------
 #[tauri::command]
 async fn list_games(app_ids: Vec<u32>) -> Result<Vec<OwnedGame>, String> {
+    if app_ids.len() > MAX_CANDIDATE_APP_IDS {
+        return Err("app_ids 數量超過上限".to_string());
+    }
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<OwnedGame>, String> {
         // Full library from the SAM master list (games.xml); fall back to the
         // bundled candidate ids if that download fails.
@@ -305,8 +313,8 @@ fn run_worker(args: &[String]) -> Result<String, String> {
                 .read_to_string(&mut payload)
                 .map_err(|e| e.to_string())?;
             let w: WritePayload = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
-            let saved = steam_core::write_game(app_id, &w.achievements, &w.stats)?;
-            Ok(format!("{{\"saved\":{saved}}}"))
+            let result = steam_core::write_game(app_id, &w.achievements, &w.stats)?;
+            serde_json::to_string(&result).map_err(|e| e.to_string())
         }
         // Note: there is intentionally no "count" mode. Completion is read from the
         // local stats cache in-process (see game_progress / steam_core::completion_local)

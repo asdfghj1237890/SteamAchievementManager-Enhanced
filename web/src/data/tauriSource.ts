@@ -73,7 +73,9 @@ export class TauriSource implements SamSource {
       unlocked: a.unlocked,
       hidden: a.hidden,
       protected: a.protected,
-      points: 0,
+      // Weight rarer achievements higher, matching the mock source + the Achievement
+      // type's documented "100 - rarity" derivation (was hardcoded 0 → banner showed 0/0).
+      points: Math.max(0, 100 - Math.round(a.rarity)),
       icon: a.icon,
       iconGray: a.icon_gray,
       unlockTime: a.unlock_time,
@@ -96,14 +98,15 @@ export class TauriSource implements SamSource {
           value: s.value,
           extra: s.increment_only ? 'increment_only' : '',
           protected: s.protected,
+          isFloat: s.is_float,
         }),
       ),
     }
   }
 
   async saveChanges(appId: string, changes: GameChanges): Promise<SaveResult> {
-    const r = await invoke<{ saved: number }>('save_changes', { appId, changes })
-    return { saved: r.saved }
+    const r = await invoke<{ saved: number; rejected?: string[] }>('save_changes', { appId, changes })
+    return { saved: r.saved, rejected: r.rejected ?? [] }
   }
 
   async loadProgress(appId: string): Promise<GameCompletion> {

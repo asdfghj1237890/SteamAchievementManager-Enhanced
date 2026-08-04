@@ -72,6 +72,7 @@ export class MockSource implements SamSource {
         saved++
       }
     }
-    return { saved }
+    // The mock persists every change it is given, so nothing is ever rejected.
+    return { saved, rejected: [] }
   }
 }

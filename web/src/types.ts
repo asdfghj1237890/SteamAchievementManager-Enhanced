@@ -35,6 +35,9 @@ export interface Stat {
   value: number
   extra: string
   protected: boolean
+  /** True for float stats; false for integer stats. Undefined for demo data.
+   *  Integer stats must not be written a fractional value (Steam rejects it). */
+  isFloat?: boolean
 }
 
 export interface Game {

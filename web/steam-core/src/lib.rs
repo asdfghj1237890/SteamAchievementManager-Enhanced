@@ -129,6 +129,19 @@ pub struct StatChange {
     pub value: f64,
 }
 
+/// Outcome of a `write_game`/`write_stats` call.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WriteResult {
+    /// Number of changes Steam actually applied (after StoreStats succeeded).
+    pub saved: u32,
+    /// Ids Steam refused: a schema-protected/unknown achievement, a protected/unknown
+    /// stat, or a stat value that failed validation. This lets the UI report a *true*
+    /// partial save instead of inferring rejection from `saved < requested` — Steam
+    /// also returns "not applied" for a no-op re-write (e.g. re-locking an already
+    /// locked achievement), which is not a rejection and must not be treated as one.
+    pub rejected: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 struct StatDef {
     id: String,
@@ -419,7 +432,15 @@ impl<'a> KvReader<'a> {
     }
 }
 
-fn parse_kv_children(r: &mut KvReader) -> Option<Vec<Kv>> {
+/// Max KeyValues nesting depth. Real Steam schemas nest only a handful of levels;
+/// a crafted `.bin` with unbounded type-0 nesting would otherwise recurse until the
+/// stack overflows and aborts the process. Past this depth we reject the file.
+const MAX_KV_DEPTH: usize = 64;
+
+fn parse_kv_children(r: &mut KvReader, depth: usize) -> Option<Vec<Kv>> {
+    if depth > MAX_KV_DEPTH {
+        return None;
+    }
     let mut out = Vec::new();
     loop {
         let t = r.u8()?;
@@ -428,7 +449,7 @@ fn parse_kv_children(r: &mut KvReader) -> Option<Vec<Kv>> {
         }
         let name = r.cstr()?;
         let (value, children) = match t {
-            0 => (KvValue::None, parse_kv_children(r)?),
+            0 => (KvValue::None, parse_kv_children(r, depth + 1)?),
             1 => (KvValue::Str(r.cstr()?), Vec::new()),
             2 => (KvValue::Int(r.i32()?), Vec::new()),
             3 => (KvValue::Float(r.f32()?), Vec::new()),
@@ -447,7 +468,7 @@ fn parse_kv_children(r: &mut KvReader) -> Option<Vec<Kv>> {
 
 fn parse_kv(data: &[u8]) -> Option<Kv> {
     let mut r = KvReader { data, pos: 0 };
-    let children = parse_kv_children(&mut r)?;
+    let children = parse_kv_children(&mut r, 0)?;
     Some(Kv {
         name: "<root>".into(),
         value: KvValue::None,
@@ -462,6 +483,26 @@ mod tests {
         writable_stat_def, StatChange, StatDef,
     };
     use std::collections::HashMap;
+
+    /// A binary KeyValues blob nesting `depth` type-0 objects, each closed again.
+    fn nested_kv(depth: usize) -> Vec<u8> {
+        let mut data = Vec::new();
+        for _ in 0..depth {
+            data.push(0); // type 0: nested object
+            data.extend_from_slice(b"a\0"); // name
+        }
+        // End markers: one per opened level plus the root sequence.
+        data.extend(std::iter::repeat_n(8u8, depth + 1));
+        data
+    }
+
+    #[test]
+    fn parse_kv_depth_guard_rejects_pathological_nesting() {
+        // Shallow, well-formed nesting still parses.
+        assert!(super::parse_kv(&nested_kv(10)).is_some());
+        // A crafted schema nested past the cap is rejected, not stack-overflowed.
+        assert!(super::parse_kv(&nested_kv(5000)).is_none());
+    }
 
     fn stat(id: &str, is_float: bool, permission: i32, increment_only: bool) -> StatDef {
         StatDef {
@@ -608,7 +649,7 @@ mod imp {
         achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
         stat_bound, stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid,
         text_vdf_tokens, writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame,
-        StatChange, StatDef, StatInfo,
+        StatChange, StatDef, StatInfo, WriteResult,
     };
     use std::ffi::{c_char, c_void, CStr, CString};
     use std::path::Path;
@@ -812,7 +853,25 @@ mod imp {
         Obj(Vec<(String, VdfVal)>),
     }
 
-    fn parse_vdf(tokens: &[String], pos: &mut usize) -> Vec<(String, VdfVal)> {
+    /// Max text-VDF nesting depth. sharedconfig.vdf is only a few levels deep; a
+    /// crafted file with unbounded `{` nesting would otherwise overflow the stack.
+    const MAX_VDF_DEPTH: usize = 100;
+
+    /// Consume tokens up to and including the brace that closes the block we are
+    /// already inside — iteratively, so skipping an over-deep block costs no stack.
+    fn skip_vdf_block(tokens: &[String], pos: &mut usize) {
+        let mut depth = 1usize;
+        while *pos < tokens.len() && depth > 0 {
+            match tokens[*pos].as_str() {
+                "{" => depth += 1,
+                "}" => depth -= 1,
+                _ => {}
+            }
+            *pos += 1;
+        }
+    }
+
+    fn parse_vdf(tokens: &[String], pos: &mut usize, depth: usize) -> Vec<(String, VdfVal)> {
         let mut out = Vec::new();
         while *pos < tokens.len() {
             if tokens[*pos] == "}" {
@@ -826,7 +885,12 @@ mod imp {
             }
             if tokens[*pos] == "{" {
                 *pos += 1;
-                out.push((key, VdfVal::Obj(parse_vdf(tokens, pos))));
+                if depth >= MAX_VDF_DEPTH {
+                    // Too deep to be a real config; skip the block instead of recursing.
+                    skip_vdf_block(tokens, pos);
+                } else {
+                    out.push((key, VdfVal::Obj(parse_vdf(tokens, pos, depth + 1))));
+                }
             } else {
                 out.push((key, VdfVal::Str(tokens[*pos].clone())));
                 *pos += 1;
@@ -916,7 +980,7 @@ mod imp {
         if let Ok(txt) = std::fs::read_to_string(&vdf) {
             let tokens = text_vdf_tokens(&txt);
             let mut pos = 0;
-            let tree = parse_vdf(&tokens, &mut pos);
+            let tree = parse_vdf(&tokens, &mut pos, 0);
             if let Some(apps) = vdf_find(&tree, "apps") {
                 for (app_str, v) in apps {
                     let VdfVal::Obj(app) = v else { continue };
@@ -1312,7 +1376,10 @@ mod imp {
                     if id.is_empty() {
                         continue;
                     }
-                    let idc = CString::new(id.clone()).unwrap();
+                    let idc = match CString::new(id.clone()) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
 
                     let name = cstr(get_disp(stats, idc.as_ptr(), key_name.as_ptr()));
                     let desc = cstr(get_disp(stats, idc.as_ptr(), key_desc.as_ptr()));
@@ -1394,7 +1461,7 @@ mod imp {
             app_id: u32,
             ach_changes: &[AchChange],
             stat_changes: &[StatChange],
-        ) -> Result<u32, String> {
+        ) -> Result<WriteResult, String> {
             unsafe {
                 let stats = self.prepare_stats()?;
                 let set_ach: extern "C" fn(*mut c_void, *const c_char) -> u8 = vfn(stats, 6);
@@ -1405,6 +1472,7 @@ mod imp {
                 let set_float: extern "C" fn(*mut c_void, *const c_char, f32) -> u8 = vfn(stats, 2);
 
                 let mut applied = 0u32;
+                let mut rejected: Vec<String> = Vec::new();
                 if !ach_changes.is_empty() {
                     // Fail closed: never modify schema-protected achievements, even if a
                     // stale or crafted renderer payload asks us to (these are irreversible
@@ -1416,6 +1484,7 @@ mod imp {
                                 // Same `& 3` mask as the read path, but fail closed for
                                 // unknown ids instead of assuming permission 0.
                                 if !achievement_write_allowed(&ach_perms, &ch.id) {
+                                    rejected.push(ch.id.clone());
                                     continue;
                                 }
                                 let idc = match CString::new(ch.id.clone()) {
@@ -1446,6 +1515,7 @@ mod imp {
                         vfn(stats, 0);
                     for sc in stat_changes {
                         let Some(def) = writable_stat_def(&defs, sc) else {
+                            rejected.push(sc.id.clone());
                             continue;
                         };
                         let idc = match CString::new(sc.id.clone()) {
@@ -1466,6 +1536,7 @@ mod imp {
                             v as f64
                         };
                         if !stat_value_is_valid(def, sc, current) {
+                            rejected.push(sc.id.clone());
                             continue;
                         }
                         let ok = if def.is_float {
@@ -1485,39 +1556,10 @@ mod imp {
                 if store(stats) == 0 {
                     return Err("StoreStats 失敗（變更未寫入）".into());
                 }
-                Ok(applied)
-            }
-        }
-
-        /// Lightweight completion count (earned, total) — skips display attrs/icons.
-        pub fn count_achievements(&self) -> Result<(u32, u32), String> {
-            unsafe {
-                let stats = self.prepare_stats()?;
-                let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
-                let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
-                let get_ach: extern "C" fn(*mut c_void, *const c_char, *mut u8) -> u8 =
-                    vfn(stats, 5);
-                let total = num(stats);
-                let mut earned = 0u32;
-                for i in 0..total {
-                    let id_ptr = get_name(stats, i);
-                    if id_ptr.is_null() {
-                        continue;
-                    }
-                    let id = cstr(id_ptr);
-                    if id.is_empty() {
-                        continue;
-                    }
-                    let idc = match CString::new(id) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-                    let mut achieved: u8 = 0;
-                    if get_ach(stats, idc.as_ptr(), &mut achieved) != 0 && achieved != 0 {
-                        earned += 1;
-                    }
-                }
-                Ok((earned, total))
+                Ok(WriteResult {
+                    saved: applied,
+                    rejected,
+                })
             }
         }
 
@@ -1635,18 +1677,10 @@ pub fn read_game(app_id: u32) -> Result<GameStats, String> {
 
 /// Apply achievement + stat changes and StoreStats. Per-game process.
 #[cfg(windows)]
-pub fn write_game(app_id: u32, ach: &[AchChange], stats: &[StatChange]) -> Result<u32, String> {
+pub fn write_game(app_id: u32, ach: &[AchChange], stats: &[StatChange]) -> Result<WriteResult, String> {
     std::env::set_var("SteamAppId", app_id.to_string());
     let client = imp::SteamClient::connect()?;
     client.write_stats(app_id, ach, stats)
-}
-
-/// Light (earned, total) achievement completion for one game. Per-game process.
-#[cfg(windows)]
-pub fn progress_game(app_id: u32) -> Result<(u32, u32), String> {
-    std::env::set_var("SteamAppId", app_id.to_string());
-    let client = imp::SteamClient::connect()?;
-    client.count_achievements()
 }
 
 /// Full owned-games library via the SAM master list (fetch games.xml + ownership scan).
@@ -1692,13 +1726,7 @@ pub fn read_game(app_id: u32) -> Result<GameStats, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn progress_game(app_id: u32) -> Result<(u32, u32), String> {
-    std::env::set_var("SteamAppId", app_id.to_string());
-    imp_macos::SteamClient::connect()?.count_achievements()
-}
-
-#[cfg(target_os = "macos")]
-pub fn write_game(app_id: u32, ach: &[AchChange], stats: &[StatChange]) -> Result<u32, String> {
+pub fn write_game(app_id: u32, ach: &[AchChange], stats: &[StatChange]) -> Result<WriteResult, String> {
     std::env::set_var("SteamAppId", app_id.to_string());
     imp_macos::SteamClient::connect()?.write_stats(app_id, ach, stats)
 }
@@ -1729,12 +1757,11 @@ pub fn read_game(_app_id: u32) -> Result<GameStats, String> {
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub fn write_game(_app_id: u32, _ach: &[AchChange], _stats: &[StatChange]) -> Result<u32, String> {
-    Err("Steam 整合僅支援 Windows".into())
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-pub fn progress_game(_app_id: u32) -> Result<(u32, u32), String> {
+pub fn write_game(
+    _app_id: u32,
+    _ach: &[AchChange],
+    _stats: &[StatChange],
+) -> Result<WriteResult, String> {
     Err("Steam 整合僅支援 Windows".into())
 }
 

@@ -74,8 +74,12 @@ export function enrichAchievement(g: Game, a: Achievement, t: Translate, savedUn
   const badge = a.protected ? t('badge.protected') : a.hidden ? t('badge.hidden') : null
 
   const iconFile = a.unlocked ? a.icon : a.iconGray ?? a.icon
+  // iconFile comes from Steam's schema display attributes (untrusted). Encode it so a
+  // crafted value can't alter the URL path (the CSP img-src allowlist already pins the
+  // host, so this is defense-in-depth). Steam icon names are flat, so encoding is a no-op
+  // for legitimate values.
   const iconUrl = iconFile
-    ? `https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/apps/${g.appId}/${iconFile}`
+    ? `https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/apps/${g.appId}/${encodeURIComponent(iconFile)}`
     : undefined
 
   return {

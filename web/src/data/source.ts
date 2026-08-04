@@ -8,6 +8,14 @@ export interface GameChanges {
 
 export interface SaveResult {
   saved: number
+  /**
+   * Ids Steam refused (a schema-protected/unknown achievement, a protected/unknown
+   * stat, or a stat value that failed validation). Empty when everything requested
+   * was applied. The UI keys off this rather than comparing `saved` to the number of
+   * changes sent, because a no-op re-write (e.g. re-locking an already-locked
+   * achievement) also isn't counted in `saved` yet is not a rejection.
+   */
+  rejected: string[]
 }
 
 /**

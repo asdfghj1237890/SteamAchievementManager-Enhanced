@@ -56,6 +56,8 @@ export interface AppState {
 
   toast: string | null
   toastSeq: number
+  /** True while a save write is in flight, so the Save control can disable itself. */
+  saving: boolean
 
   // in-app update check (Tauri only)
   version: string | null
@@ -117,6 +119,7 @@ export function makeInitialState(): AppState {
 
     toast: null,
     toastSeq: 0,
+    saving: false,
 
     version: null,
     update: null,

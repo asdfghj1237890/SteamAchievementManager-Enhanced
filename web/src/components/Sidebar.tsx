@@ -1,8 +1,9 @@
-import type { CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useApp } from '../state/AppContext'
 import { visibleSummaries } from '../lib/library'
 import { useVirtualScroll, virtualRange } from '../lib/virtual'
+import { activate } from '../lib/a11y'
 import type { I18nKey } from '../i18n'
 import type { GameSummary, TypeFilter } from '../types'
 import Seg from './ui/Seg'
@@ -28,6 +29,7 @@ function sidebarCover(hue: number): string {
 export default function Sidebar() {
   const { games, state, t, set, selectGame, openLibrary, openSettings, refresh, showToast, completionFor } = useApp()
   const loc = useLocation()
+  const [addError, setAddError] = useState(false)
 
   const routeMatch = loc.pathname.match(/^\/game\/([^/]+)/)
   const routeAppId = routeMatch ? decodeURIComponent(routeMatch[1]) : null
@@ -36,20 +38,31 @@ export default function Sidebar() {
 
   // Auto-hide empty type categories: only show a chip for a type you actually own,
   // and hide the whole row when everything is one type (then 全部 == that type).
-  const presentTypes = new Set<string>(games.map((g) => g.type))
+  // These derive from the (large) games/categories lists, so memoize them — otherwise
+  // every scroll-driven re-render re-filters and re-sorts the whole library.
+  const presentTypes = useMemo(() => new Set<string>(games.map((g) => g.type)), [games])
   const showTypeChips = presentTypes.size > 1
   const effectiveType: TypeFilter =
     state.typeFilter !== 'all' && !presentTypes.has(state.typeFilter) ? 'all' : state.typeFilter
-  const visible = visibleSummaries(games, effectiveType, state.gameSearch)
+  const visible = useMemo(
+    () => visibleSummaries(games, effectiveType, state.gameSearch),
+    [games, effectiveType, state.gameSearch],
+  )
 
   // The player's own Steam library categories (from sharedconfig.vdf) — filter on top.
-  const catNames = [...new Set(Object.values(state.categories).flat())].sort((a, b) => a.localeCompare(b))
-  const shown =
-    state.categoryFilter === 'all'
-      ? visible
-      : state.categoryFilter === UNCATEGORIZED
-        ? visible.filter((g) => (state.categories[g.appId] ?? []).length === 0)
-        : visible.filter((g) => (state.categories[g.appId] ?? []).includes(state.categoryFilter))
+  const catNames = useMemo(
+    () => [...new Set(Object.values(state.categories).flat())].sort((a, b) => a.localeCompare(b)),
+    [state.categories],
+  )
+  const shown = useMemo(
+    () =>
+      state.categoryFilter === 'all'
+        ? visible
+        : state.categoryFilter === UNCATEGORIZED
+          ? visible.filter((g) => (state.categories[g.appId] ?? []).length === 0)
+          : visible.filter((g) => (state.categories[g.appId] ?? []).includes(state.categoryFilter)),
+    [visible, state.categoryFilter, state.categories],
+  )
   const virtual = useVirtualScroll()
   const rows = virtualRange(shown.length, ROW_HEIGHT, virtual.metrics.viewportHeight, virtual.metrics.scrollTop, 8)
   const visibleRows = shown.slice(rows.start, rows.end)
@@ -65,9 +78,11 @@ export default function Sidebar() {
   const onAdd = () => {
     const v = state.addId.trim()
     if (!/^\d+$/.test(v)) {
+      setAddError(true)
       showToast(t('toast.invalidAppId'))
       return
     }
+    setAddError(false)
     set((s) => {
       if (s.games.some((g) => g.appId === v || g.id === v)) return { addId: '' }
       const summary: GameSummary = {
@@ -101,7 +116,14 @@ export default function Sidebar() {
       background: selected ? 'var(--accent)' : 'var(--t3)', transition: 'width .3s',
     }
     return (
-      <div key={g.id} style={rowStyle} onClick={() => selectGame(g.appId)}>
+      <div
+        key={g.id}
+        role="button"
+        tabIndex={0}
+        aria-label={g.name}
+        style={rowStyle}
+        {...activate(() => selectGame(g.appId))}
+      >
         <Cover appId={g.appId} style={coverStyle}>{g.name[0]}</Cover>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -222,10 +244,18 @@ export default function Sidebar() {
         <div style={{ display: 'flex', gap: '7px' }}>
           <input
             value={state.addId}
-            onChange={(e) => set({ addId: e.target.value })}
+            onChange={(e) => {
+              set({ addId: e.target.value })
+              if (addError) setAddError(false)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onAdd()
+            }}
             placeholder={t('sidebar.addPlaceholder')}
+            aria-invalid={addError}
             style={{
-              flex: 1, padding: '7px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
+              flex: 1, padding: '7px 10px', borderRadius: 'var(--radius)',
+              border: '1px solid ' + (addError ? 'var(--danger)' : 'var(--bd)'),
               background: 'var(--s0)', color: 'var(--t1)', fontSize: '12.5px', outline: 'none', fontFamily: 'var(--meta)',
             }}
           />

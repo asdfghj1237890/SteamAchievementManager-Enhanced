@@ -132,17 +132,17 @@ export default function TitleBar() {
       </div>
       <div style={{ display: 'flex' }}>
         <WinCtrl
-          label="Minimize"
+          label={t('a11y.minimize')}
           onClick={winMinimize}
           icon={winIcon(<line x1="1" y1="5.5" x2="10" y2="5.5" strokeWidth="1" />)}
         />
         <WinCtrl
-          label="Maximize"
+          label={t('a11y.maximize')}
           onClick={winToggleMaximize}
           icon={winIcon(<rect x="1" y="1" width="9" height="9" rx="0.5" strokeWidth="1" />)}
         />
         <WinCtrl
-          label="Close"
+          label={t('a11y.close')}
           close
           onClick={winClose}
           icon={winIcon(

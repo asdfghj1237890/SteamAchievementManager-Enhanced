@@ -1,8 +1,9 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useApp } from '../state/AppContext'
 import { completion, filteredAch, pendingCount, type BulkMode } from '../lib/achievements'
 import { enrichAchievement } from '../lib/achievementView'
 import { virtualGridRange, virtualRange } from '../lib/virtual'
+import { activate } from '../lib/a11y'
 import type { I18nKey } from '../i18n'
 import type { AchFilter, AchSort, ViewMode } from '../types'
 import { useGameScroll } from './GameScroll'
@@ -22,13 +23,18 @@ const GRID_GAP = 12
 const LIST_ROW_HEIGHT = 64
 
 export default function Achievements() {
-  const { state, t, activeGame: g, set, bulk, store, toggleAch } = useApp()
+  const { state, t, activeGame: g, set, bulk, store, toggleAch, requestConfirm } = useApp()
   const scroll = useGameScroll()
   const contentRef = useRef<HTMLDivElement | null>(null)
   const [contentTop, setContentTop] = useState(0)
 
   const { total } = g ? completion(g, state.achState) : { total: 0 }
-  const filtered = g ? filteredAch(g, state.achState, state.origAch, state.filter, state.achSearch, state.sort) : []
+  // Memoized so scroll-driven re-renders don't re-filter/re-sort (and re-allocate) the
+  // whole achievement list every frame — only recompute when the inputs actually change.
+  const filtered = useMemo(
+    () => (g ? filteredAch(g, state.achState, state.origAch, state.filter, state.achSearch, state.sort) : []),
+    [g, state.achState, state.origAch, state.filter, state.achSearch, state.sort],
+  )
   const savedMap = g ? state.origAch[g.id] ?? {} : {}
   const pending = g ? pendingCount(g, state.achState, state.origAch, state.statState, state.origStat) : 0
 
@@ -122,7 +128,17 @@ export default function Achievements() {
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: '6px' }}>
           {BULK_BTNS.map(([mode, label]) => (
-            <Seg key={mode} onClick={() => bulk(mode)} style={{ padding: '7px 12px', color: 'var(--t1)' }}>
+            <Seg
+              key={mode}
+              onClick={() =>
+                requestConfirm({
+                  message: t('confirm.bulkMsg', { n: filtered.filter((a) => !a.protected).length }),
+                  confirmLabel: t(label),
+                  onConfirm: () => bulk(mode),
+                })
+              }
+              style={{ padding: '7px 12px', color: 'var(--t1)' }}
+            >
               {t(label)}
             </Seg>
           ))}
@@ -134,8 +150,12 @@ export default function Achievements() {
             </Seg>
           ))}
         </div>
-        <button onClick={store} style={storeStyle}>
-          {pending > 0 ? t('ach.saveN', { n: pending }) : t('ach.save')}
+        <button
+          onClick={store}
+          disabled={state.saving}
+          style={{ ...storeStyle, opacity: state.saving ? 0.6 : 1, cursor: state.saving ? 'wait' : storeStyle.cursor }}
+        >
+          {state.saving ? t('ach.save') + '…' : pending > 0 ? t('ach.saveN', { n: pending }) : t('ach.save')}
         </button>
       </div>
 
@@ -168,7 +188,14 @@ export default function Achievements() {
                         {ach.desc}
                       </div>
                     </div>
-                    <div style={ach.checkStyle} onClick={() => toggleAch(g.id, ach.id, ach.protected)}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={ach.name}
+                      aria-disabled={ach.protected}
+                      style={ach.checkStyle}
+                      {...activate(() => toggleAch(g.id, ach.id, ach.protected))}
+                    >
                       {ach.check}
                     </div>
                   </div>
@@ -191,7 +218,15 @@ export default function Achievements() {
               }}
             >
               {views.map((ach) => (
-                <div key={ach.id} style={{ ...ach.rowStyle, height: LIST_ROW_HEIGHT, boxSizing: 'border-box' }} onClick={() => toggleAch(g.id, ach.id, ach.protected)}>
+                <div
+                  key={ach.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={ach.name}
+                  aria-disabled={ach.protected}
+                  style={{ ...ach.rowStyle, height: LIST_ROW_HEIGHT, boxSizing: 'border-box' }}
+                  {...activate(() => toggleAch(g.id, ach.id, ach.protected))}
+                >
                   <div style={ach.checkStyle}>{ach.check}</div>
                   <AchIcon url={ach.iconUrl} style={ach.iconList} letter={ach.icon} />
                   <div style={{ flex: 1, minWidth: 0 }}>

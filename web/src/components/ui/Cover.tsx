@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { isTauri } from '../../data'
 import { useCoverUrl } from './useCoverUrl'
 
@@ -16,16 +16,21 @@ export default function Cover({
   const { src, onError } = useCoverUrl(appId, 'capsule')
   const [loaded, setLoaded] = useState(false)
 
-  useEffect(() => {
+  // Reset to the placeholder when the resolved URL changes (e.g. this row is reused
+  // for another game as the virtualized list scrolls). Done during render rather than
+  // via a key/effect so the <img> element is reused — the browser keeps its decoded
+  // image cache instead of re-decoding from scratch, which was causing scroll flicker.
+  const shownSrc = useRef(src)
+  if (shownSrc.current !== src) {
+    shownSrc.current = src
     setLoaded(false)
-  }, [src, appId])
+  }
 
   return (
     <div style={style}>
       {!loaded && children}
       {isTauri() && src && (
         <img
-          key={src}
           src={src}
           alt=""
           draggable={false}

@@ -4,6 +4,7 @@ import { averagePct, visibleSummaries } from '../lib/library'
 import { coverGradient } from '../lib/styles'
 import { useHover } from '../lib/useHover'
 import { useVirtualScroll, virtualGridRange } from '../lib/virtual'
+import { activate } from '../lib/a11y'
 import type { GameSummary } from '../types'
 import { ErrorPane, LoadingPane } from './Panes'
 import Cover from './ui/Cover'
@@ -39,7 +40,14 @@ function LibraryCard({ g }: { g: GameSummary }) {
   }
 
   return (
-    <div style={cardStyle} onClick={() => selectGame(g.appId)} {...hoverProps}>
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={g.name}
+      style={cardStyle}
+      {...activate(() => selectGame(g.appId))}
+      {...hoverProps}
+    >
       <Cover appId={g.appId} style={capsuleStyle}>
         {g.name[0]}
         <span style={{ position: 'absolute', bottom: '7px', right: '10px', fontSize: '8.5px', letterSpacing: '1px', fontFamily: 'var(--meta)', color: 'rgba(255,255,255,.5)' }}>

@@ -1,12 +1,12 @@
-//! macOS port of the internal-steamclient read layer. Loads steamclient.dylib
-//! via dlopen and mirrors the read surface of the Windows `imp` module. Writes
-//! are deferred this milestone (see lib.rs `write_game`).
+//! macOS port of the internal-steamclient layer. Loads steamclient.dylib via
+//! dlopen and mirrors the Windows `imp` module, including achievement/stat writes
+//! (`write_stats`, dispatched from lib.rs `write_game`).
 
 use super::{
     achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
     stat_bound, stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid,
     writable_stat_def, AchChange, AchievementInfo, GameStats, OwnedGame, StatChange, StatDef,
-    StatInfo,
+    StatInfo, WriteResult,
 };
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::Path;
@@ -670,7 +670,10 @@ impl SteamClient {
                 if id.is_empty() {
                     continue;
                 }
-                let idc = CString::new(id.clone()).unwrap();
+                let idc = match CString::new(id.clone()) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
 
                 let name = cstr(get_disp(stats, idc.as_ptr(), key_name.as_ptr()));
                 let desc = cstr(get_disp(stats, idc.as_ptr(), key_desc.as_ptr()));
@@ -746,42 +749,12 @@ impl SteamClient {
         }
     }
 
-    pub fn count_achievements(&self) -> Result<(u32, u32), String> {
-        unsafe {
-            let stats = self.prepare_stats()?;
-            let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
-            let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
-            let get_ach: extern "C" fn(*mut c_void, *const c_char, *mut u8) -> u8 = vfn(stats, 5);
-            let total = num(stats);
-            let mut earned = 0u32;
-            for i in 0..total {
-                let id_ptr = get_name(stats, i);
-                if id_ptr.is_null() {
-                    continue;
-                }
-                let id = cstr(id_ptr);
-                if id.is_empty() {
-                    continue;
-                }
-                let idc = match CString::new(id) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let mut achieved: u8 = 0;
-                if get_ach(stats, idc.as_ptr(), &mut achieved) != 0 && achieved != 0 {
-                    earned += 1;
-                }
-            }
-            Ok((earned, total))
-        }
-    }
-
     pub fn write_stats(
         &self,
         app_id: u32,
         ach_changes: &[AchChange],
         stat_changes: &[StatChange],
-    ) -> Result<u32, String> {
+    ) -> Result<WriteResult, String> {
         unsafe {
             let stats = self.prepare_stats()?;
             let set_ach: extern "C" fn(*mut c_void, *const c_char) -> u8 = vfn(stats, 6);
@@ -792,6 +765,7 @@ impl SteamClient {
             let set_float: extern "C" fn(*mut c_void, *const c_char, f32) -> u8 = vfn(stats, 2);
 
             let mut applied = 0u32;
+            let mut rejected: Vec<String> = Vec::new();
             if !ach_changes.is_empty() {
                 // Fail closed: never modify schema-protected achievements, even if a
                 // stale or crafted renderer payload asks us to (these are irreversible
@@ -803,6 +777,7 @@ impl SteamClient {
                             // Same `& 3` mask as the read path, but fail closed for
                             // unknown ids instead of assuming permission 0.
                             if !achievement_write_allowed(&ach_perms, &ch.id) {
+                                rejected.push(ch.id.clone());
                                 continue;
                             }
                             let idc = match CString::new(ch.id.clone()) {
@@ -833,6 +808,7 @@ impl SteamClient {
                     vfn(stats, 0);
                 for sc in stat_changes {
                     let Some(def) = writable_stat_def(&defs, sc) else {
+                        rejected.push(sc.id.clone());
                         continue;
                     };
                     let idc = match CString::new(sc.id.clone()) {
@@ -853,6 +829,7 @@ impl SteamClient {
                         v as f64
                     };
                     if !stat_value_is_valid(def, sc, current) {
+                        rejected.push(sc.id.clone());
                         continue;
                     }
                     let ok = if def.is_float {
@@ -872,7 +849,10 @@ impl SteamClient {
             if store(stats) == 0 {
                 return Err("StoreStats 失敗（變更未寫入）".into());
             }
-            Ok(applied)
+            Ok(WriteResult {
+                saved: applied,
+                rejected,
+            })
         }
     }
 }

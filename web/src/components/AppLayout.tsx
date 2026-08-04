@@ -6,6 +6,7 @@ import Sidebar from './Sidebar'
 import Resizer from './Resizer'
 import Toast from './Toast'
 import UpdateBanner from './UpdateBanner'
+import ConfirmDialog from './ConfirmDialog'
 
 // The app *is* the window (the design's outer canvas framing is not part of it):
 // custom title bar + sidebar + main, filling the whole OS/browser viewport.
@@ -34,6 +35,7 @@ export default function AppLayout() {
         </main>
       </div>
       <Toast />
+      <ConfirmDialog />
     </div>
   )
 }

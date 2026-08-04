@@ -3,7 +3,7 @@ import { useApp } from '../state/AppContext'
 import { segBase } from '../lib/styles'
 
 export default function Statistics() {
-  const { state, t, activeGame: g, set, setStat, resetStats, showToast } = useApp()
+  const { state, t, activeGame: g, set, setStat, resetStats, showToast, requestConfirm } = useApp()
   if (!g) return null
 
   const sw = state.statState[g.id] ?? {}
@@ -28,7 +28,17 @@ export default function Statistics() {
           {statMod > 0 ? t('stats.modifiedN', { n: statMod }) : t('stats.notModified')}
         </span>
         <div style={{ flex: 1 }} />
-        <button onClick={resetStats} style={resetStyle}>
+        <button
+          onClick={() =>
+            requestConfirm({
+              message: t('confirm.resetMsg'),
+              confirmLabel: t('stats.resetAll'),
+              danger: true,
+              onConfirm: resetStats,
+            })
+          }
+          style={resetStyle}
+        >
           ↺ {t('stats.resetAll')}
         </button>
       </div>

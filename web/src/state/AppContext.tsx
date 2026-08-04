@@ -1,5 +1,5 @@
 import {
-  createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef,
+  createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState,
   type CSSProperties, type ReactNode,
 } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -32,6 +32,15 @@ const sameRecord = <T,>(a: Record<string, T>, b: Record<string, T>): boolean => 
   return aKeys.length === bKeys.length && aKeys.every((k) => Object.is(a[k], b[k]))
 }
 
+/** A pending confirmation the {@link ConfirmDialog} renders; resolved via confirmResolve. */
+export interface ConfirmRequest {
+  message: string
+  confirmLabel: string
+  /** Style the confirm button as destructive (red). */
+  danger?: boolean
+  onConfirm: () => void
+}
+
 interface AppContextValue {
   state: AppState
   t: Translate
@@ -56,6 +65,12 @@ interface AppContextValue {
   completionFor: (appId: string) => GameCompletion | undefined
   dismissUpdate: () => void
   openReleases: () => void
+  /** The active confirmation request, or null when the modal is closed. */
+  confirm: ConfirmRequest | null
+  /** Open the confirmation modal with the given request. */
+  requestConfirm: (req: ConfirmRequest) => void
+  /** Resolve the open confirmation: true runs its onConfirm, false just closes it. */
+  confirmResolve: (ok: boolean) => void
 }
 
 const Ctx = createContext<AppContextValue | null>(null)
@@ -70,6 +85,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const toastTimer = useRef<number | undefined>(undefined)
   const cacheTimer = useRef<number | undefined>(undefined)
   const detailSeq = useRef(0)
+
+  // Confirmation modal (bulk edits, stat reset, unsaved-changes guards). Kept in local
+  // state rather than the reducer because the request carries a callback.
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
+  const confirmRef = useRef<ConfirmRequest | null>(null)
+  confirmRef.current = confirm
+  const requestConfirm = useCallback((req: ConfirmRequest) => setConfirm(req), [])
+  const confirmResolve = useCallback((ok: boolean) => {
+    const req = confirmRef.current
+    setConfirm(null)
+    if (ok) req?.onConfirm()
+  }, [])
 
   const set = useCallback((a: Action) => dispatch(a), [])
 
@@ -190,12 +217,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // ---- warn before quitting with unsaved edits in any loaded game (Tauri only) ----
+  useEffect(() => {
+    if (!isTauri()) return
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window')
+        const win = getCurrentWindow()
+        const un = await win.onCloseRequested((event) => {
+          const s = stateRef.current
+          let pending = 0
+          for (const id of Object.keys(s.loaded)) {
+            const g = s.loaded[id]
+            if (g) pending += pendingCount(g, s.achState, s.origAch, s.statState, s.origStat)
+          }
+          if (pending > 0) {
+            event.preventDefault()
+            setConfirm({
+              message: tRef.current('confirm.quitMsg', { n: pending }),
+              confirmLabel: tRef.current('confirm.quit'),
+              danger: true,
+              onConfirm: () => {
+                void win.destroy()
+              },
+            })
+          }
+        })
+        if (cancelled) un()
+        else unlisten = un
+      } catch {
+        // window API unavailable (e.g. non-Tauri) — skip the guard
+      }
+    })()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
+
   // ---- background-load every game's completion (real source only) ----
   useEffect(() => {
     const loadProgress = source.loadProgress?.bind(source)
     if (state.gamesStatus !== 'ready' || !loadProgress) return
     let cancelled = false
-    const queue = stateRef.current.games.map((g) => g.appId)
+    // Skip games whose detail is already loaded: their completion is derived live from
+    // the loaded achievements (completionFor / applyLoadedGame), so overwriting it here
+    // from the on-disk stats cache is what made the sidebar bar flicker between two
+    // values. The on-disk read stays the source only for games not yet opened.
+    const loadedDetail = stateRef.current.loaded
+    const queue = stateRef.current.games.map((g) => g.appId).filter((id) => !loadedDetail[id])
     let idx = 0
     const LIMIT = 3
     const pending = new Map<string, GameCompletion | undefined>()
@@ -322,9 +394,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
   )
 
   // ---- navigation ----
-  const selectGame = useCallback((appId: string) => navigate(`/game/${appId}`), [navigate])
-  const openLibrary = useCallback(() => navigate('/'), [navigate])
-  const openSettings = useCallback(() => navigate('/settings'), [navigate])
+  // Guard leaving the active game when it has unsaved edits: confirm first, and only
+  // navigate if the user accepts. Switching to the same game or navigating with no
+  // pending edits proceeds immediately.
+  const guardLeave = useCallback(
+    (proceed: () => void, targetAppId?: string) => {
+      const s = stateRef.current
+      const appId = s.activeAppId
+      if (!appId || appId === targetAppId) {
+        proceed()
+        return
+      }
+      const game = s.loaded[appId]
+      const pending = game
+        ? pendingCount(game, s.achState, s.origAch, s.statState, s.origStat)
+        : 0
+      if (pending > 0) {
+        setConfirm({
+          message: tRef.current('confirm.leaveMsg', { n: pending }),
+          confirmLabel: tRef.current('confirm.leave'),
+          onConfirm: proceed,
+        })
+      } else {
+        proceed()
+      }
+    },
+    [],
+  )
+  const selectGame = useCallback(
+    (appId: string) => guardLeave(() => navigate(`/game/${appId}`), appId),
+    [navigate, guardLeave],
+  )
+  const openLibrary = useCallback(() => guardLeave(() => navigate('/')), [navigate, guardLeave])
+  const openSettings = useCallback(() => guardLeave(() => navigate('/settings')), [navigate, guardLeave])
 
   const refresh = useCallback(() => {
     source
@@ -388,7 +490,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setStat = useCallback((appId: string, id: string, raw: string) => {
     const v = raw === '' ? 0 : Number(raw)
     if (Number.isNaN(v)) return
-    dispatch((s) => ({ statState: { ...s.statState, [appId]: { ...s.statState[appId], [id]: v } } }))
+    // Integer stats must not receive a fractional value — Steam silently drops such a
+    // write, which then looks like a rejected/partial save. Truncate to match what will
+    // actually be committed. (Float stats and demo data with no isFloat flag pass through.)
+    const stat = stateRef.current.loaded[appId]?.stats.find((s) => s.id === id)
+    const value = stat?.isFloat === false ? Math.trunc(v) : v
+    dispatch((s) => ({ statState: { ...s.statState, [appId]: { ...s.statState[appId], [id]: value } } }))
   }, [])
 
   const resetStats = useCallback(() => {
@@ -422,12 +529,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Object.keys(sw).forEach((k) => {
       if (sw[k] !== so[k]) changes.stats[k] = sw[k]
     })
+    dispatch({ saving: true })
     try {
       const res = await source.saveChanges(appId, changes)
-      if (res.saved < n) {
-        // Steam committed fewer changes than we sent (e.g. one was rejected). Re-read
-        // ground truth so the UI never shows a rejected edit as saved — but keep any
-        // edit the user made while the write/reload was in flight (it stays pending).
+      if (res.rejected.length > 0) {
+        // Steam refused some changes (schema-protected/unknown, or an invalid value).
+        // Re-read ground truth so the UI never shows a rejected edit as saved — but keep
+        // any edit the user made while the write/reload was in flight (it stays pending).
+        // Keying off the explicit rejected list (not saved < n) avoids a false "partial
+        // save" when a change was simply a no-op (Steam reports those as not-applied too).
         const fresh = await source.loadGame(appId)
         // `aw`/`sw` are the working maps captured at save start (immutable), so
         // applyPartialSave can tell a genuine in-flight edit from an untouched key.
@@ -449,15 +559,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       showToast(tRef.current('toast.saveFailed', { msg: errMsg(e) }))
+    } finally {
+      dispatch({ saving: false })
     }
   }, [source, showToast])
+
+  // O(1) completion lookup keyed by appId (and id) — avoids scanning the whole games
+  // list on every visible row/card render, which the virtualized lists recompute on
+  // each scroll. Rebuilt only when the games list changes.
+  const completionMap = useMemo(() => {
+    const m = new Map<string, GameCompletion | undefined>()
+    for (const g of state.games) {
+      m.set(g.appId, g.completion)
+      if (g.id !== g.appId) m.set(g.id, g.completion)
+    }
+    return m
+  }, [state.games])
+  const completionMapRef = useRef(completionMap)
+  completionMapRef.current = completionMap
 
   const completionFor = useCallback((appId: string): GameCompletion | undefined => {
     const s = stateRef.current
     if (s.activeAppId === appId && s.loaded[appId]) {
       return completionFlat(s.loaded[appId].achievements, s.achState[appId] ?? {})
     }
-    return s.games.find((g) => g.appId === appId || g.id === appId)?.completion
+    return completionMapRef.current.get(appId)
   }, [])
 
   const dismissUpdate = useCallback(() => {
@@ -478,6 +604,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     set, selectGame, openLibrary, openSettings, refresh, gotoTab, openGame,
     toggleAch, bulk, store, setStat, resetStats, showToast, completionFor,
     dismissUpdate, openReleases,
+    confirm, requestConfirm, confirmResolve,
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
