@@ -12,6 +12,7 @@ import { applyLoadedGame } from './applyLoadedGame'
 import { applyPartialSave } from './applyPartialSave'
 import { touchDetailCache } from './detailCache'
 import { appIdKey, mergeFreshGames } from './gameListMerge'
+import { progressIdsToRequest } from './progressBatch'
 import { getVersion } from '@tauri-apps/api/app'
 import { fetchLatestVersion, openReleasesPage } from '../data/update'
 import { isNewer } from '../lib/version'
@@ -23,6 +24,13 @@ import type { Game, GameCompletion, GameSummary, StyleTokens, Tab, ThemeTokens }
 
 const TOAST_MS = 2300
 const CACHE_WRITE_MS = 600
+/**
+ * Revisiting an already-loaded game normally re-reads it silently so unlocks made
+ * outside the app show up. Within this window the cached detail is trusted instead —
+ * each silent reload spawns a worker process and a full Steam read, so A→B→A
+ * navigation was costing three of them. Refresh always re-reads regardless.
+ */
+const SILENT_RELOAD_TTL_MS = 60_000
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const sameRecord = <T,>(a: Record<string, T>, b: Record<string, T>): boolean => {
   const aKeys = Object.keys(a)
@@ -83,6 +91,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const toastTimer = useRef<number | undefined>(undefined)
   const cacheTimer = useRef<number | undefined>(undefined)
   const detailSeq = useRef(0)
+  /** When each game's detail was last applied — gates the silent revisit reload. */
+  const loadedAt = useRef<Record<string, number>>({})
+  /** Games whose on-disk completion was already requested since the last refresh. */
+  const requestedProgress = useRef<{ seq: number; ids: Set<string> }>({ seq: -1, ids: new Set() })
 
   // Confirmation modal (bulk edits, stat reset, unsaved-changes guards). Kept in local
   // state rather than the reducer because the request carries a callback.
@@ -260,16 +272,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const loadProgressBatch = source.loadProgressBatch?.bind(source)
     if (state.gamesStatus !== 'ready' || !loadProgressBatch) return
     let cancelled = false
+    let settled = false
     // Skip games whose detail is already loaded: their completion is derived live from
     // the loaded achievements (completionFor / applyLoadedGame), so overwriting it here
     // from the on-disk stats cache is what made the sidebar bar flicker between two
     // values. The on-disk read stays the source only for games not yet opened.
-    const loadedDetail = stateRef.current.loaded
-    const appIds = stateRef.current.games.map((g) => g.appId).filter((id) => !loadedDetail[id])
+    // Also skip games already requested since the last refresh, so a list change (one
+    // added App ID, a scan that found new games) batches only the newcomers instead of
+    // re-reading every schema file in the library. Refresh clears that memory.
+    const tracker = requestedProgress.current
+    if (tracker.seq !== state.progressRefreshSeq) {
+      tracker.seq = state.progressRefreshSeq
+      tracker.ids.clear()
+    }
+    const appIds = progressIdsToRequest(stateRef.current.games, stateRef.current.loaded, tracker.ids)
     if (appIds.length === 0) return
+    appIds.forEach((id) => tracker.ids.add(id))
     const requested = new Set(appIds)
     void loadProgressBatch(appIds)
       .then((updates) => {
+        settled = true
         if (cancelled) return
         dispatch((cur) => ({
           games: cur.games.map((g) =>
@@ -278,11 +300,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }))
       })
       .catch(() => {
-        // Preserve the last known cache when the entire batch fails. Individual games
-        // without a local cache are omitted from a successful result and cleared above.
+        // Preserve the last known cache when the entire batch fails, and forget the
+        // request so the next list change retries. Individual games without a local
+        // cache are omitted from a successful result and cleared above.
+        settled = true
+        appIds.forEach((id) => tracker.ids.delete(id))
       })
     return () => {
       cancelled = true
+      // Superseded while in flight: its result is dropped, so let the next run ask again.
+      if (!settled) appIds.forEach((id) => tracker.ids.delete(id))
     }
   }, [state.gamesStatus, source, gamesKey, state.progressRefreshSeq])
 
@@ -311,6 +338,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ) {
               return {}
             }
+            loadedAt.current[appId] = Date.now()
             return applyLoadedGame(cur, appId, game)
           })
         })
@@ -333,7 +361,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const patch: Partial<AppState> = { activeAppId: appId, detailStatus: 'ready', detailError: null }
           return { ...patch, ...touchDetailCache({ ...cur, ...patch }, appId) }
         })
-        if (pendingCount(loaded, s.achState, s.origAch, s.statState, s.origStat) === 0) {
+        const fresh = Date.now() - (loadedAt.current[appId] ?? 0) < SILENT_RELOAD_TTL_MS
+        if (!fresh && pendingCount(loaded, s.achState, s.origAch, s.statState, s.origStat) === 0) {
           reloadGame(appId, 'silent')
         }
         return

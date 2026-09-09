@@ -1,4 +1,5 @@
 import type { GameSummary } from '../types'
+import { compareNames } from '../lib/collator'
 
 /** Merge a freshly scanned Steam library with cached/manual rows. */
 export function mergeFreshGames(current: GameSummary[], fresh: GameSummary[]): GameSummary[] {
@@ -14,7 +15,7 @@ export function mergeFreshGames(current: GameSummary[], fresh: GameSummary[]): G
     .filter((g) => g.manual && !freshIds.has(g.appId))
     .map((g) => ({ ...g }))
 
-  return [...merged, ...manual].sort((a, b) => a.name.localeCompare(b.name))
+  return [...merged, ...manual].sort((a, b) => compareNames(a.name, b.name))
 }
 
 export function appIdKey(games: GameSummary[]): string {

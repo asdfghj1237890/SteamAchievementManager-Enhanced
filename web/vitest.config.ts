@@ -10,8 +10,8 @@ export default defineConfig({
       reportsDirectory: 'coverage',
       include: [
         'src/data/{cache,mockSource,tauriSource}.ts',
-        'src/lib/{achievementView,achievements,library,styles,theme,version,virtual}.ts',
-        'src/state/{applyLoadedGame,applyPartialSave,detailCache,gameListMerge,store}.ts',
+        'src/lib/{achievementView,achievements,collator,library,styles,theme,version,virtual}.ts',
+        'src/state/{applyLoadedGame,applyPartialSave,detailCache,gameListMerge,progressBatch,store}.ts',
       ],
       thresholds: {
         statements: 85,

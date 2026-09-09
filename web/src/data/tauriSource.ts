@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { STEAM_APP_IDS } from './steamAppIds'
 import type { GameChanges, SamSource, SaveResult } from './source'
 import type { Achievement, Game, GameCompletion, GameSummary, GameType, Stat } from '../types'
+import { compareNames } from '../lib/collator'
 
 interface RawOwnedGame {
   app_id: number
@@ -66,7 +67,7 @@ export class TauriSource implements SamSource {
         type: mapType(g.type),
         hue: hueFor(g.app_id),
       }))
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort((a, b) => compareNames(a.name, b.name))
   }
 
   async loadGame(appId: string): Promise<Game> {

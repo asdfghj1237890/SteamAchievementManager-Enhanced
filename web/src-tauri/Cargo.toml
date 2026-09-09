@@ -12,6 +12,17 @@ rust-version = "1.77.2"
 members = ["vendor/urlpattern-compat"]
 resolver = "2"
 
+# Release profile (profiles only count at the workspace root, so this also covers the
+# steam-core path dependency): fat LTO + one codegen unit for a smaller, faster
+# binary — app.exe is re-spawned as the per-game worker, so its size sits on the
+# open/save path — and symbols stripped. `panic = "abort"` is deliberately NOT set:
+# a panic inside a spawn_blocking command currently surfaces as an error toast, and
+# aborting the whole app instead would be a robustness regression around raw FFI.
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]

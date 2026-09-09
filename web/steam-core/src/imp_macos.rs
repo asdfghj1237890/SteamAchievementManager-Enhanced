@@ -197,18 +197,38 @@ fn completion_local_with_context(
     })
 }
 
-/// Batch completion scan with one Steam root/account discovery for the library.
+/// Batch completion scan with one Steam root/account discovery for the library. The
+/// per-app schema reads + parses (tens of MB for a large library) run on a few
+/// threads: this path opens no Steam interface — pure local file I/O — so it is safe
+/// to parallelize.
 pub fn completion_local_many(app_ids: &[u32]) -> Vec<GameProgress> {
     let Some(root) = steam_root() else {
         return Vec::new();
     };
     let accounts = account_ids(&root);
     let preferred = most_recent_account_id(&root, &accounts);
-    app_ids
-        .iter()
-        .copied()
-        .filter_map(|app_id| completion_local_with_context(&root, &accounts, preferred, app_id))
-        .collect()
+    let scan = |ids: &[u32]| -> Vec<GameProgress> {
+        ids.iter()
+            .copied()
+            .filter_map(|app_id| completion_local_with_context(&root, &accounts, preferred, app_id))
+            .collect()
+    };
+    let threads = super::scan_threads(app_ids.len());
+    if threads <= 1 {
+        return scan(app_ids);
+    }
+    let scan = &scan;
+    let chunk = app_ids.len().div_ceil(threads);
+    std::thread::scope(|s| {
+        let workers: Vec<_> = app_ids
+            .chunks(chunk)
+            .map(|ids| s.spawn(move || scan(ids)))
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().unwrap_or_default())
+            .collect()
+    })
 }
 
 pub fn completion_local(app_id: u32) -> Option<(u32, u32)> {
@@ -507,6 +527,9 @@ impl SteamClient {
         };
 
         let start = Instant::now();
+        // Ramp 4 → 80 ms: the stats usually land within tens of ms, so the first
+        // checks come quickly, while a slow schema download still doesn't spin.
+        let mut delay = Duration::from_millis(4);
         loop {
             let mut got_ok = false;
             let mut msg = CallbackMsg {
@@ -533,7 +556,8 @@ impl SteamClient {
             if start.elapsed() > Duration::from_secs(20) {
                 return Err("等待 Steam 統計逾時（請確認該遊戲在 Steam 已安裝/有成就）".into());
             }
-            std::thread::sleep(Duration::from_millis(80));
+            std::thread::sleep(delay);
+            delay = (delay * 2).min(Duration::from_millis(80));
         }
     }
 
@@ -545,38 +569,18 @@ impl SteamClient {
         }
     }
 
-    /// Achievement permission bits keyed by id, parsed from the local schema.
-    /// Returns `None` when the schema can't be read or parsed — callers that gate
-    /// writes on protection must fail closed in that case rather than treat every
-    /// achievement as unprotected.
-    fn read_ach_perms(&self, app_id: u32) -> Option<std::collections::HashMap<String, i32>> {
+    /// Read + parse this game's local schema `.bin` once. Both the achievement
+    /// permission map (`schema_ach_perms`) and the stat definitions
+    /// (`stat_defs_from`) are derived from the returned tree, so a read or a
+    /// write never parses the file twice. `None` when it can't be read or
+    /// parsed — the write path must fail closed on that.
+    fn read_schema(&self, app_id: u32) -> Option<super::Kv> {
         let data = std::fs::read(schema_path(&self.root, app_id)).ok()?;
-        let root = super::parse_kv(&data)?;
-        let stats = root
-            .child(&app_id.to_string())
-            .and_then(|a| a.child("stats"))?;
-        let mut out = std::collections::HashMap::new();
-        for group in &stats.children {
-            let Some(bits) = group.child("bits") else {
-                continue;
-            };
-            for bit in &bits.children {
-                if let Some(id) = bit.child("name").and_then(|n| n.as_str()) {
-                    let perm = bit.child("permission").map(|p| p.as_int()).unwrap_or(0);
-                    out.insert(id.to_string(), perm);
-                }
-            }
-        }
-        Some(out)
+        super::parse_kv(&data)
     }
 
-    fn read_stat_defs(&self, app_id: u32) -> Vec<StatDef> {
-        let Ok(data) = std::fs::read(schema_path(&self.root, app_id)) else {
-            return Vec::new();
-        };
-        let Some(root) = super::parse_kv(&data) else {
-            return Vec::new();
-        };
+    /// This game's int/float stat definitions from a parsed schema tree.
+    fn stat_defs_from(&self, root: &super::Kv, app_id: u32) -> Vec<StatDef> {
         let Some(app_node) = root.child(&app_id.to_string()) else {
             return Vec::new();
         };
@@ -706,10 +710,16 @@ impl SteamClient {
             let key_icon_gray = CString::new("icon_gray").unwrap();
 
             let count = num(stats);
+            // One schema read + parse serves both the achievement permissions and the
+            // stat definitions below (the file is up to a few MB for big games).
+            let schema = self.read_schema(app_id);
             // Reads stay lenient: a missing schema just means "no protection info",
             // so display every achievement as unprotected (the write path is the one
             // that must fail closed).
-            let ach_perms = self.read_ach_perms(app_id).unwrap_or_default();
+            let ach_perms = schema
+                .as_ref()
+                .and_then(|s| super::schema_ach_perms(s, app_id))
+                .unwrap_or_default();
             let mut achievements = Vec::with_capacity(count as usize);
             for i in 0..count {
                 let id_ptr = get_name(stats, i);
@@ -769,7 +779,11 @@ impl SteamClient {
             let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 =
                 vfn(stats, 0);
             let mut stat_infos = Vec::new();
-            for d in self.read_stat_defs(app_id) {
+            let stat_defs = schema
+                .as_ref()
+                .map(|s| self.stat_defs_from(s, app_id))
+                .unwrap_or_default();
+            for d in stat_defs {
                 let idc = match CString::new(d.id.clone()) {
                     Ok(c) => c,
                     Err(_) => continue,
@@ -823,6 +837,8 @@ impl SteamClient {
             let set_int: extern "C" fn(*mut c_void, *const c_char, i32) -> u8 = vfn(stats, 3);
             let set_float: extern "C" fn(*mut c_void, *const c_char, f32) -> u8 = vfn(stats, 2);
 
+            // One schema read + parse for both the permission gate and the stat defs.
+            let schema = self.read_schema(app_id);
             let mut applied = 0u32;
             let mut rejected: Vec<String> = Vec::new();
             if !ach_changes.is_empty() {
@@ -830,7 +846,10 @@ impl SteamClient {
                 // stale or crafted renderer payload asks us to (these are irreversible
                 // Steam mutations). If the permission schema can't be read we can't tell
                 // which achievements are protected, so refuse *all* achievement writes.
-                match self.read_ach_perms(app_id) {
+                match schema
+                    .as_ref()
+                    .and_then(|s| super::schema_ach_perms(s, app_id))
+                {
                     Some(ach_perms) => {
                         for ch in ach_changes {
                             // Same `& 3` mask as the read path, but fail closed for
@@ -860,7 +879,10 @@ impl SteamClient {
             }
 
             if !stat_changes.is_empty() {
-                let defs = self.read_stat_defs(app_id);
+                let defs = schema
+                    .as_ref()
+                    .map(|s| self.stat_defs_from(s, app_id))
+                    .unwrap_or_default();
                 let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 =
                     vfn(stats, 1);
                 let get_float: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 =

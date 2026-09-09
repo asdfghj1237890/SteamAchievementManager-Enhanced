@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use steam_core::{AchChange, GameProgress, OwnedGame, StatChange};
 
 const WORKER_TIMEOUT_SECS: u64 = 45;
@@ -64,12 +64,20 @@ fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, St
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("無法啟動 worker：{e}"))?;
+    // The worker prints its JSON and exits, so "stdout reached EOF" is the completion
+    // signal: the reader thread reports it over this channel and the caller blocks on
+    // that (with the timeout cap) instead of polling try_wait on a 50 ms timer, which
+    // added up to 50 ms of pure latency to every read and write.
+    let (stdout_done, stdout_closed) = std::sync::mpsc::channel::<()>();
     let stdout_reader = child.stdout.take().map(|mut out| {
         std::thread::spawn(move || {
             let mut stdout = Vec::new();
-            out.read_to_end(&mut stdout)
+            let read = out
+                .read_to_end(&mut stdout)
                 .map(|_| stdout)
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string());
+            let _ = stdout_done.send(());
+            read
         })
     });
     let stderr_reader = child.stderr.take().map(|mut err| {
@@ -87,18 +95,17 @@ fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, St
             .map_err(|e| e.to_string())?;
         // stdin dropped here → closes the pipe so the worker's read sees EOF
     }
-    let start = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        if start.elapsed() > Duration::from_secs(WORKER_TIMEOUT_SECS) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("worker 逾時（超過 {WORKER_TIMEOUT_SECS} 秒）"));
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    // Ok: the worker closed stdout (exited, or about to). Disconnected: there was no
+    // reader thread. Either way wait() returns promptly below. Only a real timeout
+    // kills the worker.
+    if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+        stdout_closed.recv_timeout(Duration::from_secs(WORKER_TIMEOUT_SECS))
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("worker 逾時（超過 {WORKER_TIMEOUT_SECS} 秒）"));
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
 
     let stdout = join_pipe_reader(stdout_reader)?;
     let stderr = join_pipe_reader(stderr_reader)?;

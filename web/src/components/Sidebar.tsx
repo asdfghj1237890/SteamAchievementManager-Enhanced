@@ -2,6 +2,7 @@ import { memo, useMemo, useState, type CSSProperties } from 'react'
 import { useLocation } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { visibleSummaries } from '../lib/library'
+import { compareNames } from '../lib/collator'
 import { useVirtualScroll, virtualRange } from '../lib/virtual'
 import { activate } from '../lib/a11y'
 import type { I18nKey } from '../i18n'
@@ -112,7 +113,7 @@ export default function Sidebar() {
 
   // The player's own Steam library categories (from sharedconfig.vdf) — filter on top.
   const catNames = useMemo(
-    () => [...new Set(Object.values(state.categories).flat())].sort((a, b) => a.localeCompare(b)),
+    () => [...new Set(Object.values(state.categories).flat())].sort(compareNames),
     [state.categories],
   )
   const shown = useMemo(

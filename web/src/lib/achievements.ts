@@ -1,4 +1,5 @@
 import type { Achievement, AchFilter, AchSort, AchState, Game, StatState } from '../types'
+import { compareNames } from './collator'
 
 /** Apply the live unlock overrides on top of a game's base achievements. */
 export const workingAch = (g: Game, achState: AchState): Achievement[] => {
@@ -15,7 +16,7 @@ export const sortAch = (list: Achievement[], sort: AchSort): Achievement[] => {
   const out = [...list]
   if (sort === 'rarity') out.sort((a, b) => a.rarity - b.rarity) // rarest (lowest %) first
   else if (sort === 'common') out.sort((a, b) => b.rarity - a.rarity) // most common (highest %) first
-  else if (sort === 'name') out.sort((a, b) => a.name.localeCompare(b.name))
+  else if (sort === 'name') out.sort((a, b) => compareNames(a.name, b.name))
   else if (sort === 'unlock') out.sort((a, b) => (b.unlockTime ?? 0) - (a.unlockTime ?? 0)) // newest first
   return out
 }
