@@ -17,6 +17,32 @@ const APP_LIST_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const APP_LIST_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const APP_LIST_MAX_ENTRIES: usize = 250_000;
 
+/// Upper bound on how long `read_stats` waits for global achievement percentages
+/// (rarity) after the request was issued. Rarity is cosmetic, so a slow or failed
+/// call result must not hold the whole achievement list hostage.
+const GLOBAL_PCT_WAIT: Duration = Duration::from_secs(3);
+
+/// k_iSteamUtilsCallbacks (700) + 3 = SteamAPICallCompleted_t. The pipe posts one when
+/// an async call result finishes — success or failure — which lets a poll loop stop as
+/// soon as the request is over instead of running to its deadline.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+const API_CALL_COMPLETED: i32 = 703;
+
+/// If a callback message is a SteamAPICallCompleted_t, return the SteamAPICall_t handle
+/// it refers to. Layout: `uint64 m_hAsyncCall; int m_iCallback; uint32 m_cubParam;` —
+/// only the leading handle is read (unaligned), and only when the payload can hold it.
+///
+/// # Safety
+/// `param` must be null or point at `param_size` readable bytes. It comes straight from
+/// Steam_BGetCallback, which owns the buffer until Steam_FreeLastCallback.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+unsafe fn completed_call_handle(id: i32, param: *const u8, param_size: i32) -> Option<u64> {
+    if id != API_CALL_COMPLETED || param.is_null() || param_size < 8 {
+        return None;
+    }
+    Some(std::ptr::read_unaligned(param as *const u64))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct OwnedGame {
     pub app_id: u32,
@@ -596,8 +622,9 @@ fn parse_kv(data: &[u8]) -> Option<Kv> {
 #[cfg(test)]
 mod tests {
     use super::{
-        achievement_write_allowed, choose_account_id, parse_app_list_with_limit, stat_i32_value,
-        stat_value_is_valid, writable_stat_def, StatChange, StatDef,
+        achievement_write_allowed, choose_account_id, completed_call_handle,
+        parse_app_list_with_limit, stat_i32_value, stat_value_is_valid, writable_stat_def,
+        StatChange, StatDef, API_CALL_COMPLETED,
     };
     use std::collections::HashMap;
 
@@ -778,6 +805,29 @@ mod tests {
     fn app_list_rejects_more_unique_ids_than_the_limit() {
         let xml = "<game>1</game><game>2</game><game>3</game>";
         assert!(parse_app_list_with_limit(xml, 2).is_err());
+    }
+
+    #[test]
+    fn completed_call_handle_reads_only_matching_call_results() {
+        let handle: u64 = 0x1122_3344_5566_7788;
+        // SteamAPICallCompleted_t: the handle leads, followed by m_iCallback + m_cubParam.
+        let mut buf = [0u8; 16];
+        buf[..8].copy_from_slice(&handle.to_ne_bytes());
+        let p = buf.as_ptr();
+        assert_eq!(
+            unsafe { completed_call_handle(API_CALL_COMPLETED, p, 16) },
+            Some(handle)
+        );
+        // A different callback id, a truncated payload, or a null pointer never match.
+        assert_eq!(unsafe { completed_call_handle(1101, p, 16) }, None);
+        assert_eq!(
+            unsafe { completed_call_handle(API_CALL_COMPLETED, p, 4) },
+            None
+        );
+        assert_eq!(
+            unsafe { completed_call_handle(API_CALL_COMPLETED, std::ptr::null(), 16) },
+            None
+        );
     }
 }
 
@@ -1489,6 +1539,68 @@ mod imp {
             }
         }
 
+        /// Bounded wait for the global-percentage call result issued at the top of
+        /// `read_stats`. Returns true once GetAchievementAchievedPercent (vtable 36)
+        /// reports data for the first achievement. Stops early when the pipe reports the
+        /// call completed without data (offline, or the app publishes no global stats)
+        /// instead of sleeping to the deadline.
+        unsafe fn wait_global_percentages(
+            &self,
+            stats: *mut c_void,
+            get_pct: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8,
+            call: u64,
+            started: Instant,
+        ) -> bool {
+            let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
+            let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
+            if num(stats) == 0 {
+                return false;
+            }
+            let probe_ptr = get_name(stats, 0);
+            if probe_ptr.is_null() {
+                return false;
+            }
+            let Ok(probe) = CString::new(cstr(probe_ptr)) else {
+                return false;
+            };
+            let (Ok(get_cb), Ok(free_cb)) = (
+                self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>(
+                    "Steam_BGetCallback",
+                ),
+                self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
+            ) else {
+                return false;
+            };
+            // Short first sleeps so a fast answer is noticed within milliseconds; back
+            // off to 50 ms so a slow one does not spin.
+            let mut delay = Duration::from_millis(5);
+            loop {
+                let mut m = CallbackMsg {
+                    user: 0,
+                    id: 0,
+                    param: std::ptr::null_mut(),
+                    param_size: 0,
+                };
+                let mut c: i32 = 0;
+                let mut completed = false;
+                while get_cb(self.pipe, &mut m, &mut c) != 0 {
+                    if super::completed_call_handle(m.id, m.param, m.param_size) == Some(call) {
+                        completed = true;
+                    }
+                    free_cb(self.pipe);
+                }
+                let mut p: f32 = 0.0;
+                if get_pct(stats, probe.as_ptr(), &mut p) != 0 {
+                    return true;
+                }
+                if completed || started.elapsed() >= super::GLOBAL_PCT_WAIT {
+                    return false;
+                }
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_millis(50));
+            }
+        }
+
         pub fn read_stats(&self, app_id: u32) -> Result<GameStats, String> {
             unsafe {
                 let stats = self.prepare_stats()?;
@@ -1504,49 +1616,14 @@ mod imp {
                     vfn(stats, 8);
 
                 // Best-effort global achievement rarity. RequestGlobalAchievementPercentages
-                // (vtable 33) completes as a call *result* (not a broadcast callback), so we
-                // pump callbacks and poll GetAchievementAchievedPercent (vtable 36) on the
-                // first achievement until the data lands or we time out.
+                // (vtable 33) completes as a call *result* (not a broadcast callback), so
+                // fire it first and enumerate the achievements while it is in flight; the
+                // bounded wait + fill happens after the loop (wait_global_percentages).
                 let req_global: extern "C" fn(*mut c_void) -> u64 = vfn(stats, 33);
                 let get_pct: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 =
                     vfn(stats, 36);
-                req_global(stats);
-                let mut have_global = false;
-                let probe_ptr = if num(stats) > 0 {
-                    get_name(stats, 0)
-                } else {
-                    std::ptr::null()
-                };
-                if !probe_ptr.is_null() {
-                    if let Ok(probe) = CString::new(cstr(probe_ptr)) {
-                        if let (Ok(get_cb), Ok(free_cb)) = (
-                            self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>(
-                                "Steam_BGetCallback",
-                            ),
-                            self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
-                        ) {
-                            let start = Instant::now();
-                            while start.elapsed() < Duration::from_secs(8) {
-                                let mut m = CallbackMsg {
-                                    user: 0,
-                                    id: 0,
-                                    param: std::ptr::null_mut(),
-                                    param_size: 0,
-                                };
-                                let mut c: i32 = 0;
-                                while get_cb(self.pipe, &mut m, &mut c) != 0 {
-                                    free_cb(self.pipe);
-                                }
-                                let mut p: f32 = 0.0;
-                                if get_pct(stats, probe.as_ptr(), &mut p) != 0 {
-                                    have_global = true;
-                                    break;
-                                }
-                                std::thread::sleep(Duration::from_millis(50));
-                            }
-                        }
-                    }
-                }
+                let global_call = req_global(stats);
+                let global_started = Instant::now();
 
                 let key_name = CString::new("name").unwrap();
                 let key_desc = CString::new("desc").unwrap();
@@ -1584,11 +1661,6 @@ mod imp {
                     let mut unlock_time: u32 = 0;
                     get_aut(stats, idc.as_ptr(), &mut achieved, &mut unlock_time);
 
-                    let mut rarity: f32 = 0.0;
-                    if have_global {
-                        get_pct(stats, idc.as_ptr(), &mut rarity);
-                    }
-
                     let protected = (ach_perms.get(&id).copied().unwrap_or(0) & 3) != 0;
                     achievements.push(AchievementInfo {
                         name: if name.is_empty() { id.clone() } else { name },
@@ -1598,10 +1670,24 @@ mod imp {
                         hidden,
                         unlocked: achieved != 0,
                         unlock_time,
-                        rarity: rarity as f64,
+                        // Filled below once the global percentages have landed.
+                        rarity: 0.0,
                         icon,
                         icon_gray,
                     });
+                }
+
+                // Rarity last: the enumeration above gave the request a head start, so in
+                // the common case the data is already here and this costs no waiting.
+                if self.wait_global_percentages(stats, get_pct, global_call, global_started) {
+                    for a in &mut achievements {
+                        let Ok(idc) = CString::new(a.id.as_str()) else {
+                            continue;
+                        };
+                        let mut pct: f32 = 0.0;
+                        get_pct(stats, idc.as_ptr(), &mut pct);
+                        a.rarity = pct as f64;
+                    }
                 }
 
                 // ---- statistics ----

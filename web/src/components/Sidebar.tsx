@@ -1,11 +1,11 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import { memo, useMemo, useState, type CSSProperties } from 'react'
 import { useLocation } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { visibleSummaries } from '../lib/library'
 import { useVirtualScroll, virtualRange } from '../lib/virtual'
 import { activate } from '../lib/a11y'
 import type { I18nKey } from '../i18n'
-import type { GameSummary, TypeFilter } from '../types'
+import type { GameCompletion, GameSummary, TypeFilter } from '../types'
 import Seg from './ui/Seg'
 import Cover from './ui/Cover'
 
@@ -25,6 +25,67 @@ function sidebarCover(hue: number): string {
     `linear-gradient(135deg, hsl(${hue} 56% 50%), hsl(${(hue + 32) % 360} 60% 37%))`
   )
 }
+
+// One game row. Takes plain props (no context) and is memoized, so the ~30 mounted rows
+// are skipped when the sidebar re-renders for something unrelated to them — a search
+// keystroke, a toast, a scroll tick — and only rows whose game/selection/completion
+// changed are rendered again.
+const SidebarRow = memo(function SidebarRow({
+  g,
+  selected,
+  c,
+  onSelect,
+}: {
+  g: GameSummary
+  selected: boolean
+  c: GameCompletion | undefined
+  onSelect: (appId: string) => void
+}) {
+  const pct = c?.pct ?? 0
+  const rowStyle: CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: '11px', padding: '9px 10px', borderRadius: 'var(--radius)',
+    cursor: 'pointer', height: ROW_ITEM_HEIGHT, boxSizing: 'border-box',
+    border: '1px solid ' + (selected ? 'color-mix(in srgb, var(--accent) 45%, var(--bd))' : 'transparent'),
+    background: selected ? 'color-mix(in srgb, var(--accent) 13%, transparent)' : 'transparent',
+    transition: 'background .15s',
+  }
+  const coverStyle: CSSProperties = {
+    width: '80px', height: '37px', borderRadius: '5px', flex: '0 0 auto', position: 'relative',
+    overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800,
+    fontSize: '17px', color: 'rgba(255,255,255,.92)', textShadow: '0 1px 3px rgba(0,0,0,.45)',
+    letterSpacing: '.5px', border: '1px solid rgba(255,255,255,.12)', background: sidebarCover(g.hue),
+    fontFamily: "'IBM Plex Sans','Noto Sans TC',sans-serif",
+  }
+  const barStyle: CSSProperties = {
+    width: pct + '%', height: '100%', borderRadius: '999px',
+    background: selected ? 'var(--accent)' : 'var(--t3)', transition: 'width .3s',
+  }
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={g.name}
+      data-testid={`sidebar-game-${g.appId}`}
+      style={rowStyle}
+      {...activate(() => onSelect(g.appId))}
+    >
+      <Cover appId={g.appId} style={coverStyle}>{g.name[0]}</Cover>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {g.name}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '5px' }}>
+          <div style={{ flex: 1, height: '4px', borderRadius: '999px', background: 'var(--s3)', overflow: 'hidden' }}>
+            <div style={barStyle} />
+          </div>
+          <span style={{ fontSize: '10.5px', color: 'var(--t3)', fontFamily: 'var(--meta)', whiteSpace: 'nowrap' }}>
+            {c ? `${c.earned} / ${c.total}` : '—'}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+})
 
 export default function Sidebar() {
   const { games, state, t, set, selectGame, openLibrary, openSettings, refresh, showToast, completionFor } = useApp()
@@ -93,60 +154,12 @@ export default function Sidebar() {
     selectGame(v)
   }
 
-  const row = (g: GameSummary) => {
-    const selected = routeAppId === g.appId
-    const c = completionFor(g.appId)
-    const pct = c?.pct ?? 0
-    const rowStyle: CSSProperties = {
-      display: 'flex', alignItems: 'center', gap: '11px', padding: '9px 10px', borderRadius: 'var(--radius)',
-      cursor: 'pointer', height: ROW_ITEM_HEIGHT, boxSizing: 'border-box',
-      border: '1px solid ' + (selected ? 'color-mix(in srgb, var(--accent) 45%, var(--bd))' : 'transparent'),
-      background: selected ? 'color-mix(in srgb, var(--accent) 13%, transparent)' : 'transparent',
-      transition: 'background .15s',
-    }
-    const coverStyle: CSSProperties = {
-      width: '80px', height: '37px', borderRadius: '5px', flex: '0 0 auto', position: 'relative',
-      overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800,
-      fontSize: '17px', color: 'rgba(255,255,255,.92)', textShadow: '0 1px 3px rgba(0,0,0,.45)',
-      letterSpacing: '.5px', border: '1px solid rgba(255,255,255,.12)', background: sidebarCover(g.hue),
-      fontFamily: "'IBM Plex Sans','Noto Sans TC',sans-serif",
-    }
-    const barStyle: CSSProperties = {
-      width: pct + '%', height: '100%', borderRadius: '999px',
-      background: selected ? 'var(--accent)' : 'var(--t3)', transition: 'width .3s',
-    }
-    return (
-      <div
-        key={g.id}
-        role="button"
-        tabIndex={0}
-        aria-label={g.name}
-        data-testid={`sidebar-game-${g.appId}`}
-        style={rowStyle}
-        {...activate(() => selectGame(g.appId))}
-      >
-        <Cover appId={g.appId} style={coverStyle}>{g.name[0]}</Cover>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {g.name}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '5px' }}>
-            <div style={{ flex: 1, height: '4px', borderRadius: '999px', background: 'var(--s3)', overflow: 'hidden' }}>
-              <div style={barStyle} />
-            </div>
-            <span style={{ fontSize: '10.5px', color: 'var(--t3)', fontFamily: 'var(--meta)', whiteSpace: 'nowrap' }}>
-              {c ? `${c.earned} / ${c.total}` : '—'}
-            </span>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <aside
       style={{
-        width: state.sidebarWidth, flex: '0 0 auto', display: 'flex', flexDirection: 'column',
+        // Width comes from the CSS var the Resizer drives directly while dragging
+        // (see lib/sidebarWidth); state.sidebarWidth is the committed value behind it.
+        width: 'var(--sidebar-w, 280px)', flex: '0 0 auto', display: 'flex', flexDirection: 'column',
         background: 'var(--s1)', borderRight: '1px solid var(--bd)', minHeight: 0,
       }}
     >
@@ -244,7 +257,15 @@ export default function Sidebar() {
                 display: 'flex', flexDirection: 'column', gap: ROW_GAP,
               }}
             >
-              {visibleRows.map(row)}
+              {visibleRows.map((g) => (
+                <SidebarRow
+                  key={g.id}
+                  g={g}
+                  selected={routeAppId === g.appId}
+                  c={completionFor(g.appId)}
+                  onSelect={selectGame}
+                />
+              ))}
             </div>
           </div>
         )}

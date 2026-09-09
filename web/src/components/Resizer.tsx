@@ -1,6 +1,7 @@
-import { useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useApp } from '../state/AppContext'
 import { clampSidebar } from '../state/store'
+import { applySidebarWidth } from '../lib/sidebarWidth'
 
 // Drag handle straddling the sidebar / main divider. Negative margins let the
 // 7px hot zone sit on top of the 1px border without taking real layout width,
@@ -8,16 +9,24 @@ import { clampSidebar } from '../state/store'
 export default function Resizer() {
   const { state, t, set } = useApp()
   const [active, setActive] = useState(false)
+  // Live width during a drag. Written straight to the CSS var (no dispatch per
+  // mousemove, which re-rendered the whole app and persisted settings each time);
+  // committed to state once on mouseup.
+  const liveWidth = useRef(state.sidebarWidth)
 
   const onMouseDown = (e: ReactMouseEvent) => {
     e.preventDefault()
     const startX = e.clientX
     const startW = state.sidebarWidth
+    liveWidth.current = startW
     setActive(true)
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
     const onMove = (ev: globalThis.MouseEvent) => {
-      set({ sidebarWidth: clampSidebar(startW + ev.clientX - startX) })
+      const next = clampSidebar(startW + ev.clientX - startX)
+      if (next === liveWidth.current) return
+      liveWidth.current = next
+      applySidebarWidth(next)
     }
     const onUp = () => {
       setActive(false)
@@ -25,6 +34,7 @@ export default function Resizer() {
       document.body.style.cursor = ''
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      if (liveWidth.current !== startW) set({ sidebarWidth: liveWidth.current })
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)

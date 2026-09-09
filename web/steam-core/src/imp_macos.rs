@@ -615,6 +615,68 @@ impl SteamClient {
         defs
     }
 
+    /// Bounded wait for the global-percentage call result issued at the top of
+    /// `read_stats`. Returns true once GetAchievementAchievedPercent (vtable 36)
+    /// reports data for the first achievement. Stops early when the pipe reports the
+    /// call completed without data (offline, or the app publishes no global stats)
+    /// instead of sleeping to the deadline.
+    unsafe fn wait_global_percentages(
+        &self,
+        stats: *mut c_void,
+        get_pct: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8,
+        call: u64,
+        started: Instant,
+    ) -> bool {
+        let num: extern "C" fn(*mut c_void) -> u32 = vfn(stats, 13);
+        let get_name: extern "C" fn(*mut c_void, u32) -> *const c_char = vfn(stats, 14);
+        if num(stats) == 0 {
+            return false;
+        }
+        let probe_ptr = get_name(stats, 0);
+        if probe_ptr.is_null() {
+            return false;
+        }
+        let Ok(probe) = CString::new(cstr(probe_ptr)) else {
+            return false;
+        };
+        let (Ok(get_cb), Ok(free_cb)) = (
+            self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>(
+                "Steam_BGetCallback",
+            ),
+            self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
+        ) else {
+            return false;
+        };
+        // Short first sleeps so a fast answer is noticed within milliseconds; back
+        // off to 50 ms so a slow one does not spin.
+        let mut delay = Duration::from_millis(5);
+        loop {
+            let mut m = CallbackMsg {
+                user: 0,
+                id: 0,
+                param: std::ptr::null_mut(),
+                param_size: 0,
+            };
+            let mut c: i32 = 0;
+            let mut completed = false;
+            while get_cb(self.pipe, &mut m, &mut c) != 0 {
+                if super::completed_call_handle(m.id, m.param, m.param_size) == Some(call) {
+                    completed = true;
+                }
+                free_cb(self.pipe);
+            }
+            let mut p: f32 = 0.0;
+            if get_pct(stats, probe.as_ptr(), &mut p) != 0 {
+                return true;
+            }
+            if completed || started.elapsed() >= super::GLOBAL_PCT_WAIT {
+                return false;
+            }
+            std::thread::sleep(delay);
+            delay = (delay * 2).min(Duration::from_millis(50));
+        }
+    }
+
     pub fn read_stats(&self, app_id: u32) -> Result<GameStats, String> {
         unsafe {
             let stats = self.prepare_stats()?;
@@ -630,45 +692,12 @@ impl SteamClient {
                 vfn(stats, 8);
 
             // Best-effort global achievement rarity (vtable 33 request, vtable 36 poll).
+            // Fire the request first and enumerate while it is in flight; the bounded
+            // wait + fill happens after the loop (wait_global_percentages).
             let req_global: extern "C" fn(*mut c_void) -> u64 = vfn(stats, 33);
             let get_pct: extern "C" fn(*mut c_void, *const c_char, *mut f32) -> u8 = vfn(stats, 36);
-            req_global(stats);
-            let mut have_global = false;
-            let probe_ptr = if num(stats) > 0 {
-                get_name(stats, 0)
-            } else {
-                std::ptr::null()
-            };
-            if !probe_ptr.is_null() {
-                if let Ok(probe) = CString::new(cstr(probe_ptr)) {
-                    if let (Ok(get_cb), Ok(free_cb)) = (
-                        self.export::<extern "C" fn(i32, *mut CallbackMsg, *mut i32) -> u8>(
-                            "Steam_BGetCallback",
-                        ),
-                        self.export::<extern "C" fn(i32) -> u8>("Steam_FreeLastCallback"),
-                    ) {
-                        let start = Instant::now();
-                        while start.elapsed() < Duration::from_secs(8) {
-                            let mut m = CallbackMsg {
-                                user: 0,
-                                id: 0,
-                                param: std::ptr::null_mut(),
-                                param_size: 0,
-                            };
-                            let mut c: i32 = 0;
-                            while get_cb(self.pipe, &mut m, &mut c) != 0 {
-                                free_cb(self.pipe);
-                            }
-                            let mut p: f32 = 0.0;
-                            if get_pct(stats, probe.as_ptr(), &mut p) != 0 {
-                                have_global = true;
-                                break;
-                            }
-                            std::thread::sleep(Duration::from_millis(50));
-                        }
-                    }
-                }
-            }
+            let global_call = req_global(stats);
+            let global_started = Instant::now();
 
             let key_name = CString::new("name").unwrap();
             let key_desc = CString::new("desc").unwrap();
@@ -706,11 +735,6 @@ impl SteamClient {
                 let mut unlock_time: u32 = 0;
                 get_aut(stats, idc.as_ptr(), &mut achieved, &mut unlock_time);
 
-                let mut rarity: f32 = 0.0;
-                if have_global {
-                    get_pct(stats, idc.as_ptr(), &mut rarity);
-                }
-
                 let protected = (ach_perms.get(&id).copied().unwrap_or(0) & 3) != 0;
                 achievements.push(AchievementInfo {
                     name: if name.is_empty() { id.clone() } else { name },
@@ -720,10 +744,24 @@ impl SteamClient {
                     hidden,
                     unlocked: achieved != 0,
                     unlock_time,
-                    rarity: rarity as f64,
+                    // Filled below once the global percentages have landed.
+                    rarity: 0.0,
                     icon,
                     icon_gray,
                 });
+            }
+
+            // Rarity last: the enumeration above gave the request a head start, so in
+            // the common case the data is already here and this costs no waiting.
+            if self.wait_global_percentages(stats, get_pct, global_call, global_started) {
+                for a in &mut achievements {
+                    let Ok(idc) = CString::new(a.id.as_str()) else {
+                        continue;
+                    };
+                    let mut pct: f32 = 0.0;
+                    get_pct(stats, idc.as_ptr(), &mut pct);
+                    a.rarity = pct as f64;
+                }
             }
 
             // ---- statistics ----

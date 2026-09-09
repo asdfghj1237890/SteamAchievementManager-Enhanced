@@ -1,6 +1,7 @@
-import type { CSSProperties } from 'react'
+import { useLayoutEffect, type CSSProperties } from 'react'
 import { Outlet } from 'react-router'
 import { useApp } from '../state/AppContext'
+import { applySidebarWidth } from '../lib/sidebarWidth'
 import TitleBar from './TitleBar'
 import Sidebar from './Sidebar'
 import Resizer from './Resizer'
@@ -11,7 +12,12 @@ import ConfirmDialog from './ConfirmDialog'
 // The app *is* the window (the design's outer canvas framing is not part of it):
 // custom title bar + sidebar + main, filling the whole OS/browser viewport.
 export default function AppLayout() {
-  const { rootVars } = useApp()
+  const { rootVars, state } = useApp()
+  // Committed sidebar width → CSS var. The Resizer writes the same var while dragging,
+  // so the sidebar follows the mouse without a React render per mousemove.
+  useLayoutEffect(() => {
+    applySidebarWidth(state.sidebarWidth)
+  }, [state.sidebarWidth])
   const root: CSSProperties = {
     ...rootVars,
     height: '100vh',

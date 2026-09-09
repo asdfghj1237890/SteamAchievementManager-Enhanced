@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useLocation } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { completion, points } from '../lib/achievements'
@@ -10,7 +10,9 @@ import { useCoverUrl } from './ui/useCoverUrl'
 
 const TABS: [Tab, I18nKey][] = [['ach', 'tab.ach'], ['stats', 'tab.stats']]
 
-export default function GameHeader() {
+// memo: the parent (GameScreen) re-renders on every scroll of the game screen, and
+// nothing in the header depends on scroll — it only needs context/route changes.
+export default memo(function GameHeader() {
   const { state, t, activeGame, gotoTab, openLibrary } = useApp()
   const loc = useLocation()
   const { src: heroSrc, onError: onHeroError } = useCoverUrl(activeGame?.appId ?? '', 'hero')
@@ -18,13 +20,17 @@ export default function GameHeader() {
   useEffect(() => {
     setHeroLoaded(false)
   }, [heroSrc, activeGame?.appId])
-  if (!activeGame) return null
+  // Whole-list reductions over the achievements, recomputed only when the game or
+  // its working unlock state changes — not on every unrelated context update.
+  const achState = state.achState
+  const comp = useMemo(() => (activeGame ? completion(activeGame, achState) : null), [activeGame, achState])
+  const pts = useMemo(() => (activeGame ? points(activeGame, achState) : null), [activeGame, achState])
+  if (!activeGame || !comp || !pts) return null
 
   const g = activeGame
   const currentTab: Tab = loc.pathname.endsWith('/stats') ? 'stats' : 'ach'
   const dark = state.theme !== 'light'
-  const { earned, total, pct } = completion(g, state.achState)
-  const pts = points(g, state.achState)
+  const { earned, total, pct } = comp
   // Real Steam hero art replaces the gradient placeholder once it has loaded.
   const showArt = isTauri() && !!heroSrc && heroLoaded
 
@@ -126,4 +132,4 @@ export default function GameHeader() {
       </div>
     </>
   )
-}
+})

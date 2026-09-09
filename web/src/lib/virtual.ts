@@ -66,11 +66,20 @@ export function useVirtualScroll() {
   const [metrics, setMetrics] = useState<VirtualMetrics>({ scrollTop: 0, viewportHeight: 0, viewportWidth: 0 })
 
   const readMetrics = useCallback((el: HTMLDivElement) => {
-    setMetrics({
+    const next: VirtualMetrics = {
       scrollTop: el.scrollTop,
       viewportHeight: el.clientHeight,
       viewportWidth: el.clientWidth,
-    })
+    }
+    // Same numbers → same object, so React bails out instead of re-rendering every
+    // consumer on a no-op scroll event or ResizeObserver tick.
+    setMetrics((prev) =>
+      prev.scrollTop === next.scrollTop &&
+      prev.viewportHeight === next.viewportHeight &&
+      prev.viewportWidth === next.viewportWidth
+        ? prev
+        : next,
+    )
   }, [])
 
   const containerRef = useCallback((el: HTMLDivElement | null) => {

@@ -1,11 +1,12 @@
-import type { CSSProperties } from 'react'
+import { memo, useMemo, type CSSProperties } from 'react'
 import { useApp } from '../state/AppContext'
 import { averagePct, visibleSummaries } from '../lib/library'
 import { coverGradient } from '../lib/styles'
 import { useHover } from '../lib/useHover'
 import { useVirtualScroll, virtualGridRange } from '../lib/virtual'
 import { activate } from '../lib/a11y'
-import type { GameSummary } from '../types'
+import type { Translate } from '../i18n'
+import type { GameCompletion, GameSummary } from '../types'
 import { ErrorPane, LoadingPane } from './Panes'
 import Cover from './ui/Cover'
 
@@ -14,10 +15,20 @@ const CARD_HEIGHT = 214
 const GRID_GAP = 16
 const HORIZONTAL_PADDING = 48
 
-function LibraryCard({ g }: { g: GameSummary }) {
-  const { t, selectGame, completionFor } = useApp()
+// Plain props + memo (no context subscription): a card only re-renders when its own
+// game, completion, or translator changes, not on every unrelated app-state update.
+const LibraryCard = memo(function LibraryCard({
+  g,
+  c,
+  t,
+  onSelect,
+}: {
+  g: GameSummary
+  c: GameCompletion | undefined
+  t: Translate
+  onSelect: (appId: string) => void
+}) {
   const { hover, hoverProps } = useHover()
-  const c = completionFor(g.appId)
   const pct = c?.pct ?? 0
 
   const cardStyle: CSSProperties = {
@@ -46,7 +57,7 @@ function LibraryCard({ g }: { g: GameSummary }) {
       aria-label={g.name}
       data-testid={`library-game-${g.appId}`}
       style={cardStyle}
-      {...activate(() => selectGame(g.appId))}
+      {...activate(() => onSelect(g.appId))}
       {...hoverProps}
     >
       <Cover appId={g.appId} style={capsuleStyle}>
@@ -72,11 +83,18 @@ function LibraryCard({ g }: { g: GameSummary }) {
       </div>
     </div>
   )
-}
+})
 
 export default function Library() {
-  const { games, state, t } = useApp()
+  const { games, state, t, selectGame, completionFor } = useApp()
   const virtual = useVirtualScroll()
+  // Filter + average over the whole library, memoized like the Sidebar's copy: this
+  // screen re-renders on every scroll event and every context update.
+  const visible = useMemo(
+    () => visibleSummaries(games, state.typeFilter, state.gameSearch),
+    [games, state.typeFilter, state.gameSearch],
+  )
+  const libAvg = useMemo(() => averagePct(visible), [visible])
 
   if (state.gamesStatus === 'loading' || state.gamesStatus === 'idle') {
     return <LoadingPane label={t('lib.loading')} />
@@ -85,8 +103,6 @@ export default function Library() {
     return <ErrorPane msg={state.gamesError} />
   }
 
-  const visible = visibleSummaries(games, state.typeFilter, state.gameSearch)
-  const libAvg = averagePct(visible)
   const grid = virtualGridRange(
     visible.length,
     Math.max(0, virtual.metrics.viewportWidth - HORIZONTAL_PADDING),
@@ -124,7 +140,7 @@ export default function Library() {
             }}
           >
             {visibleCards.map((g) => (
-              <LibraryCard key={g.id} g={g} />
+              <LibraryCard key={g.id} g={g} c={completionFor(g.appId)} t={t} onSelect={selectGame} />
             ))}
           </div>
         </div>

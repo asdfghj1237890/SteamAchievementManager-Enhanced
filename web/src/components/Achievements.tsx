@@ -21,6 +21,7 @@ const GRID_MIN_WIDTH = 224
 const GRID_CARD_HEIGHT = 158
 const GRID_GAP = 12
 const LIST_ROW_HEIGHT = 64
+const EMPTY_SAVED: Record<string, boolean> = {}
 
 export default function Achievements() {
   const { state, t, activeGame: g, set, bulk, store, toggleAch, requestConfirm } = useApp()
@@ -28,15 +29,29 @@ export default function Achievements() {
   const contentRef = useRef<HTMLDivElement | null>(null)
   const [contentTop, setContentTop] = useState(0)
 
-  const { total } = g ? completion(g, state.achState) : { total: 0 }
-  // Memoized so scroll-driven re-renders don't re-filter/re-sort (and re-allocate) the
-  // whole achievement list every frame — only recompute when the inputs actually change.
+  // Every whole-list pass below is memoized: this component re-renders on each scroll
+  // event (it consumes the game screen's scroll metrics for virtualization) and on any
+  // context update, and none of these values depend on either.
+  const achState = state.achState
+  const origAch = state.origAch
+  const total = useMemo(() => (g ? completion(g, achState).total : 0), [g, achState])
   const filtered = useMemo(
-    () => (g ? filteredAch(g, state.achState, state.origAch, state.filter, state.achSearch, state.sort) : []),
-    [g, state.achState, state.origAch, state.filter, state.achSearch, state.sort],
+    () => (g ? filteredAch(g, achState, origAch, state.filter, state.achSearch, state.sort) : []),
+    [g, achState, origAch, state.filter, state.achSearch, state.sort],
   )
-  const savedMap = g ? state.origAch[g.id] ?? {} : {}
-  const pending = g ? pendingCount(g, state.achState, state.origAch, state.statState, state.origStat) : 0
+  const savedMap = useMemo(() => (g ? origAch[g.id] ?? EMPTY_SAVED : EMPTY_SAVED), [g, origAch])
+  const pending = useMemo(
+    () => (g ? pendingCount(g, achState, origAch, state.statState, state.origStat) : 0),
+    [g, achState, origAch, state.statState, state.origStat],
+  )
+  // Counts reflect the SAVED partition, matching what each filter actually shows.
+  const savedUnlockedCount = useMemo(
+    () =>
+      g
+        ? g.achievements.reduce((n, a) => n + ((a.id in savedMap ? savedMap[a.id] : a.unlocked) ? 1 : 0), 0)
+        : 0,
+    [g, savedMap],
+  )
 
   useLayoutEffect(() => {
     if (!g || !scroll.node || !contentRef.current) return
@@ -61,16 +76,16 @@ export default function Achievements() {
   )
   const rows = virtualRange(filtered.length, LIST_ROW_HEIGHT, viewportHeight, localScrollTop, 8)
   const range = state.view === 'grid' ? grid : rows
-  const visibleAchievements = filtered.slice(range.start, range.end)
-  const views = g ? visibleAchievements.map((a) => enrichAchievement(g, a, t, !!savedMap[a.id])) : []
+  // The enriched view objects (styles, labels, dates) for the visible window only;
+  // recomputed when the window moves or its inputs change, not on every render.
+  const views = useMemo(
+    () =>
+      g ? filtered.slice(range.start, range.end).map((a) => enrichAchievement(g, a, t, !!savedMap[a.id])) : [],
+    [g, filtered, range.start, range.end, t, savedMap],
+  )
 
   if (!g) return null
 
-  // Counts reflect the SAVED partition, matching what each filter actually shows.
-  const savedUnlockedCount = g.achievements.reduce(
-    (n, a) => n + ((a.id in savedMap ? savedMap[a.id] : a.unlocked) ? 1 : 0),
-    0,
-  )
   const FILTER_BTNS: [AchFilter, string][] = [
     ['all', t('filter.all', { n: total })],
     ['unlocked', t('filter.unlocked', { n: savedUnlockedCount })],
