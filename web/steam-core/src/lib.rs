@@ -378,6 +378,102 @@ fn stat_bound(stat: &Kv, key: &str, default: f64) -> f64 {
     }
 }
 
+/// A schema stat's kind: 1 = integer, 2 = float (AverageRate counts as float),
+/// 0 = not a user-writable numeric stat. Schemas spell the type as a number, a
+/// name, or a separate `type_int` key depending on their vintage.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn resolve_stat_type(stat: &Kv) -> u8 {
+    let raw = stat
+        .child("type")
+        .map(|n| {
+            if let Some(s) = n.as_str() {
+                s.parse::<i32>()
+                    .unwrap_or_else(|_| match s.to_ascii_lowercase().as_str() {
+                        "integer" | "int" => 1,
+                        "float" => 2,
+                        "averagerate" => 3,
+                        "achievements" => 4,
+                        "groupachievements" => 5,
+                        _ => 0,
+                    })
+            } else {
+                n.as_int()
+            }
+        })
+        .unwrap_or(0);
+    let raw = if raw == 0 {
+        stat.child("type_int").map(|n| n.as_int()).unwrap_or(0)
+    } else {
+        raw
+    };
+    match raw {
+        1 => 1,     // Integer
+        2 | 3 => 2, // Float / AverageRate
+        _ => 0,
+    }
+}
+
+/// A stat's display name: a plain string, else the game language, then english,
+/// then any localized child, else `fallback` (the API name).
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn resolve_display_name(stat: &Kv, lang: &str, fallback: &str) -> String {
+    let Some(name_node) = stat.child("display").and_then(|d| d.child("name")) else {
+        return fallback.to_string();
+    };
+    if let Some(s) = name_node.as_str() {
+        return s.to_string();
+    }
+    name_node
+        .child(lang)
+        .and_then(|c| c.as_str())
+        .or_else(|| name_node.child("english").and_then(|c| c.as_str()))
+        .or_else(|| name_node.children.iter().find_map(|c| c.as_str()))
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+/// This game's int/float stat definitions from one parsed schema tree
+/// (`UserGameStatsSchema_<appid>.bin`), display names resolved for `lang`.
+/// Shared by the Windows and macOS clients; both read the tree once per command.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn schema_stat_defs(root: &Kv, app_id: u32, lang: &str) -> Vec<StatDef> {
+    let Some(stats) = root
+        .child(&app_id.to_string())
+        .and_then(|a| a.child("stats"))
+    else {
+        return Vec::new();
+    };
+    let mut defs = Vec::new();
+    for stat in &stats.children {
+        let kind = resolve_stat_type(stat);
+        if kind == 0 {
+            continue;
+        }
+        let id = stat
+            .child("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        if id.is_empty() {
+            continue;
+        }
+        defs.push(StatDef {
+            name: resolve_display_name(stat, lang, &id),
+            is_float: kind == 2,
+            permission: stat.child("permission").map(|p| p.as_int()).unwrap_or(0),
+            increment_only: stat
+                .child("incrementonly")
+                .map(|p| p.as_bool())
+                .unwrap_or(false),
+            min_value: stat_bound(stat, "min", stat_min_default(kind == 2)),
+            max_value: stat_bound(stat, "max", stat_max_default(kind == 2)),
+            max_change: stat_bound(stat, "maxchange", 0.0).max(0.0),
+            id,
+        });
+    }
+    defs
+}
+
 fn stat_i32_value(change: &StatChange) -> Option<i32> {
     let value = change.value;
     if !value.is_finite() || value.fract() != 0.0 {
@@ -660,15 +756,221 @@ fn parse_kv(data: &[u8]) -> Option<Kv> {
     })
 }
 
+/// Fixture helpers shared by the tests in this file and in the platform modules: a
+/// writer for Steam's binary KeyValues format (the inverse of `parse_kv`), so tests
+/// can lay down realistic `UserGameStatsSchema_*.bin` / `UserGameStats_*.bin` files
+/// without a Steam install.
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// One node of a binary KeyValues tree.
+    pub(crate) enum KvNode {
+        Obj(String, Vec<KvNode>),
+        Str(String, String),
+        Int(String, i32),
+        Float(String, f32),
+    }
+
+    pub(crate) fn kv_obj(name: &str, children: Vec<KvNode>) -> KvNode {
+        KvNode::Obj(name.to_string(), children)
+    }
+    pub(crate) fn kv_str(name: &str, value: &str) -> KvNode {
+        KvNode::Str(name.to_string(), value.to_string())
+    }
+    pub(crate) fn kv_int(name: &str, value: i32) -> KvNode {
+        KvNode::Int(name.to_string(), value)
+    }
+    pub(crate) fn kv_float(name: &str, value: f32) -> KvNode {
+        KvNode::Float(name.to_string(), value)
+    }
+
+    fn write_cstr(out: &mut Vec<u8>, text: &str) {
+        out.extend_from_slice(text.as_bytes());
+        out.push(0);
+    }
+
+    fn write_node(out: &mut Vec<u8>, node: &KvNode) {
+        match node {
+            KvNode::Obj(name, children) => {
+                out.push(0);
+                write_cstr(out, name);
+                for child in children {
+                    write_node(out, child);
+                }
+                out.push(8);
+            }
+            KvNode::Str(name, value) => {
+                out.push(1);
+                write_cstr(out, name);
+                write_cstr(out, value);
+            }
+            KvNode::Int(name, value) => {
+                out.push(2);
+                write_cstr(out, name);
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+            KvNode::Float(name, value) => {
+                out.push(3);
+                write_cstr(out, name);
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+    }
+
+    /// Serialize a root-level node sequence the way Steam's `.bin` files are laid out.
+    pub(crate) fn kv_bytes(nodes: &[KvNode]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for node in nodes {
+            write_node(&mut out, node);
+        }
+        out.push(8);
+        out
+    }
+
+    /// A `UserGameStatsSchema_<app>.bin`: each entry of `groups` becomes one
+    /// achievement group of `(name, permission)` bits; `stats` are appended as
+    /// further stat nodes under the same `stats` block.
+    pub(crate) fn schema_bytes(
+        app_id: u32,
+        groups: &[&[(&str, i32)]],
+        stats: Vec<KvNode>,
+    ) -> Vec<u8> {
+        let mut nodes: Vec<KvNode> = groups
+            .iter()
+            .enumerate()
+            .map(|(n, bits)| {
+                let bits = bits
+                    .iter()
+                    .enumerate()
+                    .map(|(b, (name, perm))| {
+                        kv_obj(
+                            &b.to_string(),
+                            vec![kv_str("name", name), kv_int("permission", *perm)],
+                        )
+                    })
+                    .collect();
+                kv_obj(
+                    &n.to_string(),
+                    vec![kv_str("type", "4"), kv_obj("bits", bits)],
+                )
+            })
+            .collect();
+        nodes.extend(stats);
+        kv_bytes(&[kv_obj(&app_id.to_string(), vec![kv_obj("stats", nodes)])])
+    }
+
+    /// A `UserGameStats_<account>_<app>.bin` with one AchievementTimes entry per
+    /// unlocked achievement.
+    pub(crate) fn user_stats_bytes(unlocked: &[&str]) -> Vec<u8> {
+        let times = unlocked
+            .iter()
+            .map(|name| kv_int(name, 1_700_000_000))
+            .collect();
+        kv_bytes(&[kv_obj(
+            "cache",
+            vec![kv_obj("0", vec![kv_obj("AchievementTimes", times)])],
+        )])
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_support::{kv_bytes, kv_float, kv_int, kv_obj, kv_str, schema_bytes};
     use super::{
         achievement_write_allowed, choose_account_id, completed_call_handle,
-        parse_app_list_with_limit, scan_threads, schema_ach_perms, stat_i32_value,
-        stat_value_is_valid, writable_stat_def, Kv, KvValue, StatChange, StatDef,
-        API_CALL_COMPLETED,
+        parse_app_list_with_limit, scan_threads, schema_ach_perms, schema_stat_defs,
+        stat_i32_value, stat_min_default, stat_value_is_valid, writable_stat_def, Kv, KvValue,
+        StatChange, StatDef, API_CALL_COMPLETED,
     };
     use std::collections::HashMap;
+
+    #[test]
+    fn kv_fixture_writer_round_trips_through_parse_kv() {
+        let bytes = kv_bytes(&[kv_obj(
+            "root",
+            vec![
+                kv_str("name", "kills"),
+                kv_int("permission", 2),
+                kv_float("ratio", 0.5),
+                kv_obj("nested", vec![kv_str("x", "y")]),
+            ],
+        )]);
+        let tree = super::parse_kv(&bytes).expect("well-formed");
+        let root = tree.child("root").expect("root object");
+        assert_eq!(root.child("name").and_then(|n| n.as_str()), Some("kills"));
+        assert_eq!(root.child("permission").map(|n| n.as_int()), Some(2));
+        assert_eq!(root.child("ratio").map(|n| n.as_float()), Some(0.5));
+        assert_eq!(
+            root.child("nested")
+                .and_then(|n| n.child("x"))
+                .and_then(|x| x.as_str()),
+            Some("y")
+        );
+    }
+
+    #[test]
+    fn schema_stat_defs_resolves_types_names_and_bounds_from_one_tree() {
+        let bytes = schema_bytes(
+            440,
+            &[&[("ACH_A", 0)]],
+            vec![
+                kv_obj(
+                    "kills",
+                    vec![
+                        kv_str("type", "1"),
+                        kv_str("name", "kills"),
+                        kv_obj(
+                            "display",
+                            vec![kv_obj(
+                                "name",
+                                vec![kv_str("english", "Kills"), kv_str("tchinese", "擊殺")],
+                            )],
+                        ),
+                        kv_int("permission", 2),
+                        kv_int("incrementonly", 1),
+                        kv_str("min", "0"),
+                        kv_str("max", "1000"),
+                        kv_str("maxchange", "50"),
+                    ],
+                ),
+                kv_obj(
+                    "accuracy",
+                    vec![
+                        kv_str("type", "float"),
+                        kv_str("name", "accuracy"),
+                        kv_obj("display", vec![kv_str("name", "Accuracy")]),
+                    ],
+                ),
+                // Integer type spelled the old way, but no API name → skipped.
+                kv_obj("anon", vec![kv_int("type_int", 1), kv_str("name", "")]),
+            ],
+        );
+        let root = super::parse_kv(&bytes).expect("fixture parses");
+        let defs = schema_stat_defs(&root, 440, "tchinese");
+        assert_eq!(defs.len(), 2, "achievement group and empty id are skipped");
+        let kills = &defs[0];
+        assert_eq!(kills.id, "kills");
+        assert_eq!(kills.name, "擊殺", "game language wins");
+        assert!(!kills.is_float);
+        assert_eq!(kills.permission, 2);
+        assert!(kills.increment_only);
+        assert_eq!(
+            (kills.min_value, kills.max_value, kills.max_change),
+            (0.0, 1000.0, 50.0)
+        );
+        let accuracy = &defs[1];
+        assert!(accuracy.is_float);
+        assert_eq!(accuracy.name, "Accuracy", "plain display name");
+        assert_eq!(accuracy.min_value, stat_min_default(true));
+        assert_eq!(accuracy.max_change, 0.0);
+        assert_eq!(
+            schema_stat_defs(&root, 440, "german")[0].name,
+            "Kills",
+            "english fallback"
+        );
+        assert!(schema_stat_defs(&root, 570, "english").is_empty());
+        // The same parsed tree feeds the permission map: one read serves both.
+        assert_eq!(schema_ach_perms(&root, 440).unwrap().get("ACH_A"), Some(&0));
+    }
 
     /// A binary KeyValues blob nesting `depth` type-0 objects, each closed again.
     fn nested_kv(depth: usize) -> Vec<u8> {
@@ -934,9 +1236,8 @@ mod tests {
 mod imp {
     use super::{
         achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
-        stat_bound, stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid,
-        text_vdf_tokens, writable_stat_def, AchChange, AchievementInfo, GameProgress, GameStats,
-        OwnedGame, StatChange, StatDef, StatInfo, WriteResult,
+        stat_i32_value, stat_value_is_valid, text_vdf_tokens, writable_stat_def, AchChange,
+        AchievementInfo, GameProgress, GameStats, OwnedGame, StatChange, StatInfo, WriteResult,
     };
     use std::ffi::{c_char, c_void, CStr, CString};
     use std::time::{Duration, Instant};
@@ -1028,54 +1329,6 @@ mod imp {
             }
         }
         None
-    }
-
-    fn resolve_stat_type(stat: &super::Kv) -> u8 {
-        let raw = stat
-            .child("type")
-            .map(|n| {
-                if let Some(s) = n.as_str() {
-                    s.parse::<i32>()
-                        .unwrap_or_else(|_| match s.to_ascii_lowercase().as_str() {
-                            "integer" | "int" => 1,
-                            "float" => 2,
-                            "averagerate" => 3,
-                            "achievements" => 4,
-                            "groupachievements" => 5,
-                            _ => 0,
-                        })
-                } else {
-                    n.as_int()
-                }
-            })
-            .unwrap_or(0);
-        let raw = if raw == 0 {
-            stat.child("type_int").map(|n| n.as_int()).unwrap_or(0)
-        } else {
-            raw
-        };
-        match raw {
-            1 => 1,     // Integer
-            2 | 3 => 2, // Float / AverageRate
-            _ => 0,
-        }
-    }
-
-    fn resolve_display_name(stat: &super::Kv, lang: &str, fallback: &str) -> String {
-        let Some(name_node) = stat.child("display").and_then(|d| d.child("name")) else {
-            return fallback.to_string();
-        };
-        if let Some(s) = name_node.as_str() {
-            return s.to_string();
-        }
-        // localized: try the game language, then english, then any child
-        name_node
-            .child(lang)
-            .and_then(|c| c.as_str())
-            .or_else(|| name_node.child("english").and_then(|c| c.as_str()))
-            .or_else(|| name_node.children.iter().find_map(|c| c.as_str()))
-            .unwrap_or(fallback)
-            .to_string()
     }
 
     fn account_ids(install: &str) -> Vec<u32> {
@@ -1170,13 +1423,19 @@ mod imp {
         let Some(install) = install_path() else {
             return Vec::new();
         };
-        let accounts = account_ids(&install);
-        let preferred = most_recent_account_id(&install, &accounts);
+        completion_local_many_in(&install, app_ids)
+    }
+
+    /// The scan itself for a given Steam install root (tests point this at a
+    /// fixture directory instead of the registry-resolved install).
+    fn completion_local_many_in(install: &str, app_ids: &[u32]) -> Vec<GameProgress> {
+        let accounts = account_ids(install);
+        let preferred = most_recent_account_id(install, &accounts);
         let scan = |ids: &[u32]| -> Vec<GameProgress> {
             ids.iter()
                 .copied()
                 .filter_map(|app_id| {
-                    completion_local_with_context(&install, &accounts, preferred, app_id)
+                    completion_local_with_context(install, &accounts, preferred, app_id)
                 })
                 .collect()
         };
@@ -1827,7 +2086,7 @@ mod imp {
                 let mut stat_infos = Vec::new();
                 let stat_defs = schema
                     .as_ref()
-                    .map(|s| self.stat_defs_from(s, app_id))
+                    .map(|s| super::schema_stat_defs(s, app_id, &self.game_language()))
                     .unwrap_or_default();
                 for d in stat_defs {
                     let idc = match CString::new(d.id.clone()) {
@@ -1927,7 +2186,7 @@ mod imp {
                 if !stat_changes.is_empty() {
                     let defs = schema
                         .as_ref()
-                        .map(|s| self.stat_defs_from(s, app_id))
+                        .map(|s| super::schema_stat_defs(s, app_id, &self.game_language()))
                         .unwrap_or_default();
                     let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 =
                         vfn(stats, 1);
@@ -2004,46 +2263,6 @@ mod imp {
             let data = std::fs::read(&path).ok()?;
             super::parse_kv(&data)
         }
-
-        /// This game's int/float stat definitions from a parsed schema tree.
-        fn stat_defs_from(&self, root: &super::Kv, app_id: u32) -> Vec<StatDef> {
-            let Some(app_node) = root.child(&app_id.to_string()) else {
-                return Vec::new();
-            };
-            let Some(stats) = app_node.child("stats") else {
-                return Vec::new();
-            };
-            let lang = self.game_language();
-            let mut defs = Vec::new();
-            for stat in &stats.children {
-                let kind = resolve_stat_type(stat);
-                if kind == 0 {
-                    continue;
-                }
-                let id = stat
-                    .child("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if id.is_empty() {
-                    continue;
-                }
-                defs.push(StatDef {
-                    name: resolve_display_name(stat, &lang, &id),
-                    is_float: kind == 2,
-                    permission: stat.child("permission").map(|p| p.as_int()).unwrap_or(0),
-                    increment_only: stat
-                        .child("incrementonly")
-                        .map(|p| p.as_bool())
-                        .unwrap_or(false),
-                    min_value: stat_bound(stat, "min", stat_min_default(kind == 2)),
-                    max_value: stat_bound(stat, "max", stat_max_default(kind == 2)),
-                    max_change: stat_bound(stat, "maxchange", 0.0).max(0.0),
-                    id,
-                });
-            }
-            defs
-        }
     }
 
     impl Drop for SteamClient {
@@ -2054,6 +2273,183 @@ mod imp {
                     let _ = f(self.client, self.pipe);
                 }
             }
+        }
+    }
+
+    /// File-only paths exercised against a throwaway Steam install root under the
+    /// OS temp dir — no Steam client, no registry.
+    #[cfg(test)]
+    mod tests {
+        use super::{
+            account_ids, collect_categories, completion_local_many_in,
+            completion_local_with_context, user_stats_path,
+        };
+        use crate::test_support::{kv_obj, kv_str, schema_bytes, user_stats_bytes};
+        use std::collections::{BTreeSet, HashMap};
+
+        fn fixture_root(tag: &str) -> String {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!(
+                "steam-core-test-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).expect("temp fixture dir");
+            dir.to_string_lossy().trim_end_matches('\\').to_string()
+        }
+
+        fn write(path: String, bytes: &[u8]) {
+            let path = std::path::Path::new(&path);
+            std::fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir");
+            std::fs::write(path, bytes).expect("write fixture");
+        }
+
+        fn schema_path(root: &str, app_id: u32) -> String {
+            format!(r"{root}\appcache\stats\UserGameStatsSchema_{app_id}.bin")
+        }
+
+        #[test]
+        fn completion_reads_total_from_the_schema_and_earned_from_the_account_with_a_cache() {
+            let root = fixture_root("completion");
+            std::fs::create_dir_all(format!(r"{root}\userdata\111")).unwrap();
+            std::fs::create_dir_all(format!(r"{root}\userdata\222")).unwrap();
+            write(
+                schema_path(&root, 440),
+                &schema_bytes(440, &[&[("A", 0), ("B", 3)], &[("C", 0)]], Vec::new()),
+            );
+            write(
+                user_stats_path(&root, 222, 440),
+                &user_stats_bytes(&["A", "C"]),
+            );
+            write(
+                schema_path(&root, 570),
+                &schema_bytes(570, &[&[("ONLY", 0)]], Vec::new()),
+            );
+            write(
+                schema_path(&root, 730),
+                &schema_bytes(
+                    730,
+                    &[],
+                    vec![kv_obj(
+                        "s",
+                        vec![kv_str("type", "1"), kv_str("name", "kills")],
+                    )],
+                ),
+            );
+
+            let accounts = account_ids(&root);
+            assert_eq!(accounts, vec![111, 222]);
+            // No loginusers.vdf → no preferred account → the one holding the cache wins.
+            let p = completion_local_with_context(&root, &accounts, None, 440)
+                .expect("schema has bits");
+            assert_eq!((p.app_id, p.earned, p.total), (440, 2, 3));
+            let p = completion_local_with_context(&root, &accounts, None, 570)
+                .expect("schema has bits");
+            assert_eq!(
+                (p.earned, p.total),
+                (0, 1),
+                "no per-user cache → nothing earned"
+            );
+            assert!(
+                completion_local_with_context(&root, &accounts, None, 730).is_none(),
+                "stats-only schema has no achievements"
+            );
+            assert!(
+                completion_local_with_context(&root, &accounts, None, 999).is_none(),
+                "missing schema"
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn completion_scan_covers_every_app_across_threads() {
+            let root = fixture_root("scan");
+            std::fs::create_dir_all(format!(r"{root}\userdata\111")).unwrap();
+            let ids: Vec<u32> = (1000..1040).collect();
+            for (n, app_id) in ids.iter().enumerate() {
+                let bits: Vec<(&str, i32)> = (0..=n % 5).map(|_| ("X", 0)).collect();
+                write(
+                    schema_path(&root, *app_id),
+                    &schema_bytes(*app_id, &[bits.as_slice()], Vec::new()),
+                );
+                if n % 2 == 0 {
+                    write(
+                        user_stats_path(&root, 111, *app_id),
+                        &user_stats_bytes(&["X"]),
+                    );
+                }
+            }
+            // 40 apps → several scan threads on a multi-core box, one on a single core;
+            // the result must be the same either way.
+            let mut got = completion_local_many_in(&root, &ids);
+            got.sort_by_key(|p| p.app_id);
+            assert_eq!(got.len(), ids.len());
+            for (n, p) in got.iter().enumerate() {
+                assert_eq!(p.app_id, ids[n]);
+                assert_eq!(p.total as usize, n % 5 + 1);
+                assert_eq!(p.earned, if n % 2 == 0 { 1 } else { 0 });
+            }
+            let _ = std::fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn categories_merge_modern_collections_with_legacy_tags() {
+            let root = fixture_root("categories");
+            write(
+                format!(r"{root}\userdata\111\config\cloudstorage\cloud-storage-namespace-1.json"),
+                br#"[["user-collections.abc",{"value":"{\"name\":\"Favorites\",\"added\":[440,570]}"}],["user-collections.dyn",{"value":"{\"name\":\"Dynamic\"}"}],["other",{"value":"x"}]]"#,
+            );
+            write(
+                format!(r"{root}\userdata\111\7\remote\sharedconfig.vdf"),
+                br#""UserRoleConfigStore"
+{
+    "Software"
+    {
+        "Valve"
+        {
+            "Steam"
+            {
+                "apps"
+                {
+                    "440"
+                    {
+                        "tags"
+                        {
+                            "0"        "Shooter"
+                        }
+                    }
+                    "730"
+                    {
+                        "tags"
+                        {
+                            "0"        "FPS"
+                            "1"        ""
+                        }
+                    }
+                }
+            }
+        }
+    }
+}"#,
+            );
+            let mut map: HashMap<u32, BTreeSet<String>> = HashMap::new();
+            collect_categories(&root, 111, &mut map);
+            let names = |id: u32| -> Vec<String> {
+                map.get(&id)
+                    .map(|set| set.iter().cloned().collect())
+                    .unwrap_or_default()
+            };
+            assert_eq!(names(440), vec!["Favorites", "Shooter"]);
+            assert_eq!(
+                names(570),
+                vec!["Favorites"],
+                "dynamic collection adds nothing"
+            );
+            assert_eq!(names(730), vec!["FPS"], "empty tag is skipped");
+            assert!(!map.contains_key(&999));
+            let _ = std::fs::remove_dir_all(&root);
         }
     }
 }

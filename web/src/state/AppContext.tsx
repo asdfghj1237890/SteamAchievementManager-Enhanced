@@ -319,8 +319,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const seq = detailSeq.current + 1
       detailSeq.current = seq
       const snapshot = stateRef.current
-      const achSnapshot = { ...(snapshot.achState[appId] ?? {}) }
-      const statSnapshot = { ...(snapshot.statState[appId] ?? {}) }
+      const achSnapshot = { ...snapshot.achState[appId] }
+      const statSnapshot = { ...snapshot.statState[appId] }
 
       if (mode === 'visible') {
         dispatch({ activeAppId: appId, detailStatus: 'loading', detailError: null })
@@ -526,8 +526,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         dispatch((cur) => ({
           // Advance the saved baseline only for the values we actually sent, so an edit
           // made while the async write was in flight stays pending (not falsely "saved").
-          origAch: { ...cur.origAch, [appId]: { ...(cur.origAch[appId] ?? {}), ...changes.achievements } },
-          origStat: { ...cur.origStat, [appId]: { ...(cur.origStat[appId] ?? {}), ...changes.stats } },
+          origAch: { ...cur.origAch, [appId]: { ...cur.origAch[appId], ...changes.achievements } },
+          origStat: { ...cur.origStat, [appId]: { ...cur.origStat[appId], ...changes.stats } },
           games: cur.games.map((g) =>
             g.appId === appId || g.id === appId
               ? { ...g, completion: completionFlat(game.achievements, cur.achState[appId] ?? {}) }

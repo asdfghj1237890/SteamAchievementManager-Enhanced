@@ -4,9 +4,8 @@
 
 use super::{
     achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
-    stat_bound, stat_i32_value, stat_max_default, stat_min_default, stat_value_is_valid,
-    writable_stat_def, AchChange, AchievementInfo, GameProgress, GameStats, OwnedGame, StatChange,
-    StatDef, StatInfo, WriteResult,
+    stat_i32_value, stat_value_is_valid, writable_stat_def, AchChange, AchievementInfo,
+    GameProgress, GameStats, OwnedGame, StatChange, StatInfo, WriteResult,
 };
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::time::{Duration, Instant};
@@ -106,53 +105,6 @@ fn find_account_id(root: &str) -> Option<u32> {
     choose_account_id_with_preferred(accounts, preferred, |_| false)
 }
 
-fn resolve_stat_type(stat: &super::Kv) -> u8 {
-    let raw = stat
-        .child("type")
-        .map(|n| {
-            if let Some(s) = n.as_str() {
-                s.parse::<i32>()
-                    .unwrap_or_else(|_| match s.to_ascii_lowercase().as_str() {
-                        "integer" | "int" => 1,
-                        "float" => 2,
-                        "averagerate" => 3,
-                        "achievements" => 4,
-                        "groupachievements" => 5,
-                        _ => 0,
-                    })
-            } else {
-                n.as_int()
-            }
-        })
-        .unwrap_or(0);
-    let raw = if raw == 0 {
-        stat.child("type_int").map(|n| n.as_int()).unwrap_or(0)
-    } else {
-        raw
-    };
-    match raw {
-        1 => 1,     // Integer
-        2 | 3 => 2, // Float / AverageRate
-        _ => 0,
-    }
-}
-
-fn resolve_display_name(stat: &super::Kv, lang: &str, fallback: &str) -> String {
-    let Some(name_node) = stat.child("display").and_then(|d| d.child("name")) else {
-        return fallback.to_string();
-    };
-    if let Some(s) = name_node.as_str() {
-        return s.to_string();
-    }
-    name_node
-        .child(lang)
-        .and_then(|c| c.as_str())
-        .or_else(|| name_node.child("english").and_then(|c| c.as_str()))
-        .or_else(|| name_node.children.iter().find_map(|c| c.as_str()))
-        .unwrap_or(fallback)
-        .to_string()
-}
-
 /// For each child of `node`, count the children of its `key` sub-node. Sum.
 fn count_children(node: &super::Kv, key: &str) -> u32 {
     node.children
@@ -205,12 +157,17 @@ pub fn completion_local_many(app_ids: &[u32]) -> Vec<GameProgress> {
     let Some(root) = steam_root() else {
         return Vec::new();
     };
-    let accounts = account_ids(&root);
-    let preferred = most_recent_account_id(&root, &accounts);
+    completion_local_many_in(&root, app_ids)
+}
+
+/// The scan itself for a given Steam root (tests point this at a fixture directory).
+fn completion_local_many_in(root: &str, app_ids: &[u32]) -> Vec<GameProgress> {
+    let accounts = account_ids(root);
+    let preferred = most_recent_account_id(root, &accounts);
     let scan = |ids: &[u32]| -> Vec<GameProgress> {
         ids.iter()
             .copied()
-            .filter_map(|app_id| completion_local_with_context(&root, &accounts, preferred, app_id))
+            .filter_map(|app_id| completion_local_with_context(root, &accounts, preferred, app_id))
             .collect()
     };
     let threads = super::scan_threads(app_ids.len());
@@ -579,46 +536,6 @@ impl SteamClient {
         super::parse_kv(&data)
     }
 
-    /// This game's int/float stat definitions from a parsed schema tree.
-    fn stat_defs_from(&self, root: &super::Kv, app_id: u32) -> Vec<StatDef> {
-        let Some(app_node) = root.child(&app_id.to_string()) else {
-            return Vec::new();
-        };
-        let Some(stats) = app_node.child("stats") else {
-            return Vec::new();
-        };
-        let lang = self.game_language();
-        let mut defs = Vec::new();
-        for stat in &stats.children {
-            let kind = resolve_stat_type(stat);
-            if kind == 0 {
-                continue;
-            }
-            let id = stat
-                .child("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("")
-                .to_string();
-            if id.is_empty() {
-                continue;
-            }
-            defs.push(StatDef {
-                name: resolve_display_name(stat, &lang, &id),
-                is_float: kind == 2,
-                permission: stat.child("permission").map(|p| p.as_int()).unwrap_or(0),
-                increment_only: stat
-                    .child("incrementonly")
-                    .map(|p| p.as_bool())
-                    .unwrap_or(false),
-                min_value: stat_bound(stat, "min", stat_min_default(kind == 2)),
-                max_value: stat_bound(stat, "max", stat_max_default(kind == 2)),
-                max_change: stat_bound(stat, "maxchange", 0.0).max(0.0),
-                id,
-            });
-        }
-        defs
-    }
-
     /// Bounded wait for the global-percentage call result issued at the top of
     /// `read_stats`. Returns true once GetAchievementAchievedPercent (vtable 36)
     /// reports data for the first achievement. Stops early when the pipe reports the
@@ -781,7 +698,7 @@ impl SteamClient {
             let mut stat_infos = Vec::new();
             let stat_defs = schema
                 .as_ref()
-                .map(|s| self.stat_defs_from(s, app_id))
+                .map(|s| super::schema_stat_defs(s, app_id, &self.game_language()))
                 .unwrap_or_default();
             for d in stat_defs {
                 let idc = match CString::new(d.id.clone()) {
@@ -881,7 +798,7 @@ impl SteamClient {
             if !stat_changes.is_empty() {
                 let defs = schema
                     .as_ref()
-                    .map(|s| self.stat_defs_from(s, app_id))
+                    .map(|s| super::schema_stat_defs(s, app_id, &self.game_language()))
                     .unwrap_or_default();
                 let get_int: extern "C" fn(*mut c_void, *const c_char, *mut i32) -> u8 =
                     vfn(stats, 1);
@@ -952,7 +869,97 @@ impl Drop for SteamClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{dylib_path, schema_path, user_stats_path};
+    use super::{
+        account_ids, completion_local_many_in, completion_local_with_context, dylib_path,
+        schema_path, user_stats_path,
+    };
+    use crate::test_support::{kv_obj, kv_str, schema_bytes, user_stats_bytes};
+
+    /// A throwaway Steam root under the OS temp dir — no Steam client involved.
+    fn fixture_root(tag: &str) -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "steam-core-test-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp fixture dir");
+        dir.to_string_lossy().trim_end_matches('/').to_string()
+    }
+
+    fn write(path: String, bytes: &[u8]) {
+        let path = std::path::Path::new(&path);
+        std::fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir");
+        std::fs::write(path, bytes).expect("write fixture");
+    }
+
+    #[test]
+    fn completion_reads_total_from_the_schema_and_earned_from_the_account_with_a_cache() {
+        let root = fixture_root("completion");
+        std::fs::create_dir_all(format!("{root}/userdata/111")).unwrap();
+        std::fs::create_dir_all(format!("{root}/userdata/222")).unwrap();
+        write(
+            schema_path(&root, 440),
+            &schema_bytes(440, &[&[("A", 0), ("B", 3)], &[("C", 0)]], Vec::new()),
+        );
+        write(
+            user_stats_path(&root, 222, 440),
+            &user_stats_bytes(&["A", "C"]),
+        );
+        write(
+            schema_path(&root, 730),
+            &schema_bytes(
+                730,
+                &[],
+                vec![kv_obj(
+                    "s",
+                    vec![kv_str("type", "1"), kv_str("name", "kills")],
+                )],
+            ),
+        );
+
+        let accounts = account_ids(&root);
+        assert_eq!(accounts, vec![111, 222]);
+        let p =
+            completion_local_with_context(&root, &accounts, None, 440).expect("schema has bits");
+        assert_eq!((p.app_id, p.earned, p.total), (440, 2, 3));
+        assert!(
+            completion_local_with_context(&root, &accounts, None, 730).is_none(),
+            "stats-only schema has no achievements"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn completion_scan_covers_every_app_across_threads() {
+        let root = fixture_root("scan");
+        std::fs::create_dir_all(format!("{root}/userdata/111")).unwrap();
+        let ids: Vec<u32> = (1000..1040).collect();
+        for (n, app_id) in ids.iter().enumerate() {
+            let bits: Vec<(&str, i32)> = (0..=n % 5).map(|_| ("X", 0)).collect();
+            write(
+                schema_path(&root, *app_id),
+                &schema_bytes(*app_id, &[bits.as_slice()], Vec::new()),
+            );
+            if n % 2 == 0 {
+                write(
+                    user_stats_path(&root, 111, *app_id),
+                    &user_stats_bytes(&["X"]),
+                );
+            }
+        }
+        let mut got = completion_local_many_in(&root, &ids);
+        got.sort_by_key(|p| p.app_id);
+        assert_eq!(got.len(), ids.len());
+        for (n, p) in got.iter().enumerate() {
+            assert_eq!(p.app_id, ids[n]);
+            assert_eq!(p.total as usize, n % 5 + 1);
+            assert_eq!(p.earned, if n % 2 == 0 { 1 } else { 0 });
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn dylib_path_is_under_appbundle() {

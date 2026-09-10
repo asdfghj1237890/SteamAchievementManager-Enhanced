@@ -3,7 +3,7 @@ import { DEFAULT_ACCENT, rootCssVars, styleTokens, themeTokens } from '../theme'
 
 function luminance(hex: string): number {
   const normalized = /^#[a-f\d]{3}$/i.test(hex)
-    ? `#${[...hex.slice(1)].map((digit) => digit + digit).join('')}`
+    ? `#${hex.slice(1).split('').map((digit) => digit + digit).join('')}`
     : hex
   const rgb = normalized.match(/[a-f\d]{2}/gi)?.map((pair) => Number.parseInt(pair, 16) / 255) ?? []
   const linear = rgb.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)

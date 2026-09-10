@@ -31,6 +31,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm run test:coverage
       - run: npm run build
       - name: npm audit (accepted advisories listed in scripts/audit-gate.mjs)

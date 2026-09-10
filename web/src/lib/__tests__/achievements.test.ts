@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  bulkApply, completion, completionFlat, filteredAch, pendingCount, points, workingAch,
+  bulkApply, completion, completionFlat, filteredAch, pendingCount, points, sortAch, workingAch,
 } from '../achievements'
 import { averagePct, visibleSummaries } from '../library'
 import { makeInitialState } from '../../state/store'
@@ -100,6 +100,24 @@ describe('library summary helpers', () => {
   it('averages completion across reporting games', () => {
     expect(averagePct(summaries)).toBe(50)
     expect(averagePct([])).toBe(0)
+  })
+})
+
+describe('sortAch', () => {
+  const ids = (list: { id: string }[]) => list.map((a) => a.id)
+  const list = game.achievements.map((a, i) => ({ ...a, unlockTime: [30, 10, 0, 20][i] }))
+
+  it('keeps the schema order for the default sort, without copying', () => {
+    expect(sortAch(list, 'default')).toBe(list)
+  })
+
+  it('orders by rarity both ways, by collated name, and by newest unlock', () => {
+    expect(ids(sortAch(list, 'rarity'))).toEqual(['a3', 'a2', 'a1', 'a0'])
+    expect(ids(sortAch(list, 'common'))).toEqual(['a0', 'a1', 'a2', 'a3'])
+    expect(ids(sortAch(list, 'name'))).toEqual(['a0', 'a1', 'a3', 'a2'])
+    expect(ids(sortAch(list, 'unlock'))).toEqual(['a0', 'a3', 'a1', 'a2'])
+    // The input is never mutated.
+    expect(ids(list)).toEqual(['a0', 'a1', 'a2', 'a3'])
   })
 })
 
