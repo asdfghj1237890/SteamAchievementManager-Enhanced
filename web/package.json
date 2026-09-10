@@ -17,6 +17,7 @@
     "test:e2e": "playwright test",
     "test:e2e:smoke": "playwright test --project=chromium --grep @smoke",
     "test:a11y": "playwright test --project=chromium --grep @a11y",
+    "test:perf": "playwright test --project=chromium --grep @perf",
     "smoke:native": "node scripts/native-smoke.mjs",
     "test:web": "npm run typecheck && npm run lint && npm run test:coverage && npm run build && npm run test:e2e",
     "test:rust": "cargo test --manifest-path steam-core/Cargo.toml --all-targets --all-features && cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features",

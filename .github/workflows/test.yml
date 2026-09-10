@@ -56,8 +56,23 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - name: Read the lockfile-pinned Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      # The browser build itself is cached per Playwright version; only the OS
+      # packages are (re)installed on a hit, which is seconds instead of minutes.
+      - name: Cache the Playwright browser build
+        id: playwright-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ steps.playwright-version.outputs.version }}
       - name: Install the lockfile-pinned Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npm exec -- playwright install --with-deps ${{ matrix.browser }}
+      - name: Install the browser's OS dependencies (browser build restored from cache)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npm exec -- playwright install-deps ${{ matrix.browser }}
       - run: npm run test:e2e -- --project=${{ matrix.browser }}
       - name: Upload browser diagnostics
         if: ${{ failure() }}

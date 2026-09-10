@@ -2454,6 +2454,107 @@ mod imp {
     }
 }
 
+/// Opt-in live checks against the local Steam client. Read-only — nothing here
+/// writes — and `#[ignore]`d, so plain `cargo test` skips them and CI never runs
+/// them (it has no logged-in client). On a development machine with Steam running:
+///
+/// ```text
+/// SAM_LIVE_STEAM=1 cargo test --release -- --ignored live_ --nocapture      # bash
+/// $env:SAM_LIVE_STEAM=1; cargo test --release -- --ignored live_ --nocapture # PowerShell
+/// ```
+///
+/// `SAM_LIVE_APP_ID` picks the app for the per-game read (default 480, Spacewar,
+/// which every account owns). Reading a game puts the account "in" that app on
+/// Steam for a moment, exactly as opening it in the app does.
+#[cfg(all(test, any(windows, target_os = "macos")))]
+mod live_tests {
+    use std::sync::{Mutex, MutexGuard};
+    use std::time::Instant;
+
+    /// The live checks share one Steam client and one disk, so they run one at a
+    /// time (cargo's default is parallel) — otherwise their timings measure each
+    /// other. `None` when the opt-in flag is missing.
+    static LIVE: Mutex<()> = Mutex::new(());
+    fn live_guard() -> Option<MutexGuard<'static, ()>> {
+        if std::env::var_os("SAM_LIVE_STEAM").is_none() {
+            eprintln!("SAM_LIVE_STEAM is not set — live check skipped");
+            return None;
+        }
+        Some(LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+    }
+
+    #[test]
+    #[ignore = "needs a running, logged-in Steam client; set SAM_LIVE_STEAM=1"]
+    fn live_list_owned_scans_the_library() {
+        let Some(_live) = live_guard() else {
+            return;
+        };
+        let started = Instant::now();
+        let games = crate::list_owned().expect("ownership scan");
+        eprintln!(
+            "list_owned: {} games in {:?}",
+            games.len(),
+            started.elapsed()
+        );
+        assert!(
+            !games.is_empty(),
+            "a logged-in account owns at least Spacewar"
+        );
+        assert!(games.iter().all(|g| g.app_id != 0 && !g.name.is_empty()));
+    }
+
+    #[test]
+    #[ignore = "needs a running, logged-in Steam client; set SAM_LIVE_STEAM=1"]
+    fn live_completion_scan_reads_the_local_cache() {
+        let Some(_live) = live_guard() else {
+            return;
+        };
+        let ids: Vec<u32> = crate::list_owned()
+            .expect("ownership scan")
+            .iter()
+            .map(|g| g.app_id)
+            .collect();
+        let started = Instant::now();
+        let progress = crate::completion_local_many(&ids);
+        eprintln!(
+            "completion_local_many: {} of {} apps have a local cache, {:?}",
+            progress.len(),
+            ids.len(),
+            started.elapsed()
+        );
+        assert!(progress.iter().all(|p| p.total > 0 && p.earned <= p.total));
+    }
+
+    #[test]
+    #[ignore = "needs a running, logged-in Steam client; set SAM_LIVE_STEAM=1"]
+    fn live_read_game_returns_achievements() {
+        let Some(_live) = live_guard() else {
+            return;
+        };
+        let app_id: u32 = std::env::var("SAM_LIVE_APP_ID")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(480);
+        let started = Instant::now();
+        let game = crate::read_game(app_id).expect("per-game read");
+        let with_rarity = game.achievements.iter().filter(|a| a.rarity > 0.0).count();
+        eprintln!(
+            "read_game({app_id}) \"{}\": {} achievements ({} with rarity), {} stats, {:?}",
+            game.name,
+            game.achievements.len(),
+            with_rarity,
+            game.stats.len(),
+            started.elapsed()
+        );
+        assert_eq!(game.app_id, app_id);
+        assert!(
+            !game.achievements.is_empty(),
+            "the app should define achievements"
+        );
+        assert!(game.achievements.iter().all(|a| !a.id.is_empty()));
+    }
+}
+
 #[cfg(windows)]
 pub use imp::SteamClient;
 

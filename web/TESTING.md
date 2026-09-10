@@ -59,6 +59,7 @@ complete web, browser, Rust, clippy, Tauri build, and native smoke sequence.
 ```bash
 npm run test:e2e:smoke # quick Chromium route smoke
 npm run test:a11y      # quick Chromium WCAG scan
+npm run test:perf      # quick Chromium scale check (2,000-game synthetic library)
 npm run test:e2e       # complete Chromium + Firefox + WebKit suite
 ```
 
@@ -67,6 +68,21 @@ the web-only `MockSource`; it never reads or writes the user's Steam account.
 The shared fixture fails on uncaught page exceptions or `console.error`.
 Failures retain a trace, screenshot, and video; CI uploads those diagnostics for
 seven days.
+
+`e2e/flows.spec.ts` covers the user-visible flows beyond the core journey:
+add-by-App-ID (inline validation, a known id, an unknown id's provisional row
+and error pane), bulk unlock behind its confirmation, the player-category
+filter (the demo source ships a few categories), cards/list switching with
+every sort order, and reset-all-stats behind its confirmation.
+
+`e2e/perf.spec.ts` (`@perf`) drives the app at real-library scale: the web
+build with `?mock=large` swaps the 16-game demo for a synthetic 2,000-game,
+500-achievement library (`src/data/mockScale.ts`, deterministic, generated per
+game on first load). It asserts behaviour only — search, open, filter, toggle,
+statistics — and lets Playwright's expect timeout act as the budget, so a
+non-virtualized list or an O(n)-per-keystroke regression fails it without any
+stopwatch flakiness. Open `http://127.0.0.1:5173/?mock=large` on a dev server
+to profile by hand at that scale.
 
 ## Rust and native shell
 
@@ -103,7 +119,9 @@ outside automated tests.
 dispatch, and as a required release gate:
 
 - Ubuntu: typecheck, lint, coverage, production web build, and `npm audit`.
-- Ubuntu: one isolated job per Chromium, Firefox, and WebKit UI suite.
+- Ubuntu: one isolated job per Chromium, Firefox, and WebKit UI suite. The
+  browser build is cached per Playwright version (`actions/cache`), so a run
+  only reinstalls the OS packages unless the pinned Playwright changes.
 - Windows and macOS: formatting, tests, and Clippy for both Rust crates, Tauri debug build,
   and native smoke.
 - Ubuntu: both Cargo lockfiles audited with pinned `cargo-audit` 0.22.2.
@@ -127,7 +145,20 @@ are irreversible and hosted runners have no authenticated Steam client. The
 renderer write journey uses `MockSource`, the Tauri IPC payload is
 contract-tested, and Rust permission/write rules are unit-tested.
 
-Live read-only integration remains opt-in on a machine with Steam running:
+Live read-only integration remains opt-in on a machine with Steam running. The
+`live_*` tests in `steam-core` are `#[ignore]`d and additionally gated on an
+environment variable, so neither `cargo test` nor CI ever touches the client:
+
+```bash
+cd steam-core
+SAM_LIVE_STEAM=1 cargo test --release -- --ignored live_ --nocapture       # bash
+$env:SAM_LIVE_STEAM=1; cargo test --release -- --ignored live_ --nocapture # PowerShell
+```
+
+They time the ownership scan, the whole-library completion scan, and one
+per-game read (`SAM_LIVE_APP_ID`, default 480 = Spacewar, which every account
+owns). The per-game read puts the account "in" that app on Steam for a moment,
+exactly as opening it in the app does. The older probes still work too:
 
 ```bash
 cargo run --manifest-path steam-core/Cargo.toml --bin probe -- <appId>
@@ -146,7 +177,9 @@ Automated tests must never add a real-account write smoke test.
 - Memoization on a hot path: add a case to `src/__tests__/renderCounts.test.tsx`.
   It counts renders by wrapping a helper the component calls once per render,
   which is deterministic — never assert on durations.
-- React journeys: add Testing Library cases under `src/__tests__/`.
+- React journeys: add a focused case to `src/__tests__/App.ui.test.tsx` using
+  its `renderApp(hash)` helper — deep-link straight to the screen under test
+  rather than extending one long journey, so a failure names the flow.
 - Renderer/Tauri changes: update `tauriSource.test.ts` to lock command names,
   argument validation, payload shape, and response mapping.
 - User-visible flows: add a Playwright scenario under `e2e/`; tag startup

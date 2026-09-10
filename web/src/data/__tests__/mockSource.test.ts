@@ -1,8 +1,57 @@
 import { describe, expect, it } from 'vitest'
 import { MockSource } from '../mockSource'
 import { GAMES } from '../games'
+import { LARGE_SCALE, scaledAppId, scaledIndex, scaledName } from '../mockScale'
 
 const src = () => new MockSource(0) // no artificial latency in tests
+
+describe('MockSource.loadCategories', () => {
+  it('ships a few demo categories so the sidebar filter is exercisable', async () => {
+    const cats = await src().loadCategories()
+    expect(cats['487120']).toEqual(['Favorites', 'Racing'])
+    expect(Object.keys(cats).every((id) => GAMES.some((g) => g.appId === id))).toBe(true)
+  })
+})
+
+describe('MockSource at scale', () => {
+  const scale = { games: 120, achievements: 40, stats: 6 }
+
+  it('lists a synthetic library of the requested size with seeded completion', async () => {
+    const games = await new MockSource(0, scale).listGames()
+    expect(games).toHaveLength(120)
+    expect(games[1]).toMatchObject({ appId: scaledAppId(1), name: scaledName(1) })
+    expect(games[1].completion?.total).toBe(40)
+    expect(scaledIndex(scaledAppId(119), scale)).toBe(119)
+    expect(scaledIndex(scaledAppId(120), scale)).toBeNull()
+    expect(scaledIndex('487120', scale)).toBeNull()
+  })
+
+  it('generates a game on first load, deterministically, and round-trips a save', async () => {
+    const s = new MockSource(0, scale)
+    const id = scaledAppId(7)
+    const first = await s.loadGame(id)
+    const again = await s.loadGame(id)
+    expect(first.achievements).toHaveLength(40)
+    expect(first.stats).toHaveLength(6)
+    expect(again).toEqual(first)
+    // The seeded unlock pattern matches the summary's completion.
+    const summary = (await s.listGames()).find((g) => g.appId === id)!
+    expect(summary.completion?.earned).toBe(first.achievements.filter((a) => a.unlocked).length)
+
+    const locked = first.achievements.find((a) => !a.unlocked && !a.protected)!
+    await s.saveChanges(id, { achievements: { [locked.id]: true }, stats: {} })
+    expect((await s.loadGame(id)).achievements.find((a) => a.id === locked.id)?.unlocked).toBe(true)
+    expect((await s.listGames()).find((g) => g.appId === id)?.completion?.earned).toBe(
+      summary.completion!.earned + 1,
+    )
+    await expect(s.loadGame('487120')).rejects.toThrow()
+    expect(await s.loadCategories()).toEqual({})
+  })
+
+  it('exposes the large preset the web build reaches through ?mock=large', () => {
+    expect(LARGE_SCALE).toEqual({ games: 2000, achievements: 500, stats: 40 })
+  })
+})
 
 describe('MockSource.listGames', () => {
   it('returns a summary per game with completion', async () => {
