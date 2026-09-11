@@ -228,8 +228,11 @@ async fn game_header(app_id: String) -> Result<String, String> {
 }
 
 // ---------- in-app update check (read-only) ----------
-const LATEST_JSON_URL: &str =
-    "https://raw.githubusercontent.com/asdfghj1237890/SteamAchievementManager-Enhanced/master/latest.json";
+/// The signed updater manifest attached to the latest GitHub Release (the same
+/// document the updater plugin verifies packages against; see the `plugins.updater`
+/// endpoint in tauri.conf.json). Only its `version` is read here, so the check works
+/// for every install — including the portable .exe, which cannot self-update.
+const LATEST_JSON_URL: &str = "https://github.com/asdfghj1237890/SteamAchievementManager-Enhanced/releases/latest/download/latest.json";
 
 /// Fetch the latest published version string from the hosted latest.json.
 #[tauri::command]
@@ -289,6 +292,29 @@ async fn open_releases() -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Whether this install can update itself in place through the updater plugin: an
+/// NSIS install on Windows (the installer leaves `uninstall.exe` beside the app; a
+/// portable copy has none) or the `.app` bundle on macOS. A portable .exe gets the
+/// download link instead of an installer that would silently install a second copy.
+#[tauri::command]
+fn updater_supported() -> bool {
+    #[cfg(windows)]
+    {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("uninstall.exe").is_file()))
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        true
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        false
+    }
+}
+
 // ---------- worker entrypoint (called from main when `--steam-worker`) ----------
 pub fn worker_main(args: &[String]) {
     match run_worker(args) {
@@ -336,6 +362,11 @@ fn run_worker(args: &[String]) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // In-app updates: the plugin fetches the signed manifest from the fixed endpoint
+        // in tauri.conf.json and verifies each package's minisign signature against the
+        // public key compiled in there before installing. `process` is for the relaunch.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -354,7 +385,8 @@ pub fn run() {
             game_categories,
             game_header,
             latest_version,
-            open_releases
+            open_releases,
+            updater_supported
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

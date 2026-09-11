@@ -40,6 +40,8 @@ tauri = { version = "2.11.5", features = [] }
 tauri-plugin-log = "2"
 steam-core = { path = "../steam-core" }
 ureq = "3"
+tauri-plugin-updater = "2.11.0"
+tauri-plugin-process = "2.3.1"
 
 # Tauri 2.11 still constrains `urlpattern` to the 0.3 series, which depends on
 # the unmaintained UNIC crates. This compatibility package preserves the 0.3

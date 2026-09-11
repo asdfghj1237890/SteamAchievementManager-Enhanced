@@ -138,6 +138,59 @@ implementation is bridged to maintained 0.6 so its five unmaintained UNIC
 crates are absent from the lockfile. Remove the GTK3 exceptions when upstream
 Tauri migrates its Linux backend, or before adding Linux as a supported target.
 
+## Releases and updates
+
+A tag `vX.Y.Z` (or a manual dispatch) runs `.github/workflows/release.yml`: the
+full test matrix, a tag-vs-version check, then one build per platform and a
+single publish step. Every release carries:
+
+| Asset | Purpose |
+|---|---|
+| `…-windows-x64-setup.exe` + `.sig` | NSIS installer (per-user, no admin) — what the in-app updater installs on Windows |
+| `…-windows-x64.exe` | Portable single executable; cannot update itself (the app shows the download link instead) |
+| `…-macos-arm64.dmg` | Manual macOS install |
+| `…-macos-arm64.app.tar.gz` + `.sig` | What the in-app updater installs on macOS |
+| `latest.json` | Updater manifest: version, per-platform package URL and minisign signature |
+| `SHA256SUMS.txt` | SHA-256 of every asset above, for verifying a manual download |
+
+**How the in-app update is protected.** `tauri-plugin-updater` fetches
+`releases/latest/download/latest.json` from the fixed endpoint in
+`tauri.conf.json`, downloads the package for the running platform, and verifies
+its minisign signature against the public key compiled into the app
+(`plugins.updater.pubkey`) before anything is installed. A package that does not
+verify is refused. The plain version check (`latest_version`) reads only the
+manifest's `version`, so a portable copy is still told about new releases.
+`latest.json` on `master` is kept in step by the `bump-latest-json` job for
+installs older than 1.4 that still read it there.
+
+**Signing key.** The private key never enters the repository. It lives with the
+maintainer (generated with `npm exec -- tauri signer generate -w <path>`) and in
+two repository secrets that the build jobs require:
+
+| Secret | Value |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | Contents of the private key file |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password |
+
+A release build fails early with a clear error if the key is missing; it is
+never silently skipped. Rotating the key means generating a new pair, replacing
+`plugins.updater.pubkey`, updating both secrets, and shipping one release that
+users install manually (an app only trusts the key it was built with).
+
+**Trying the pipeline locally** (Windows, produces the signed installer under
+`src-tauri/target/release/bundle/nsis/`):
+
+```bash
+# The bundler reads the key *contents* from TAURI_SIGNING_PRIVATE_KEY (a
+# TAURI_SIGNING_PRIVATE_KEY_PATH variable is not honoured by `tauri build`).
+export TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/sam-enhanced-updater.key")"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat "$HOME/.tauri/sam-enhanced-updater.key.password")"
+npm run tauri -- build --bundles nsis
+```
+
+Debug builds and the native smoke use `--no-bundle`, which skips bundling and
+therefore signing, so `npm run test:native` needs no key.
+
 ## Steam safety boundary
 
 CI deliberately does not perform live Steam writes: achievement/stat changes

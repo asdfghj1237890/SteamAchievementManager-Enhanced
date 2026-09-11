@@ -5,6 +5,7 @@ import { DEFAULT_ACCENT } from '../lib/theme'
 import { detectLang, type Lang } from '../i18n'
 import { loadSettings } from '../data/cache'
 import type { UpdateStatus } from '../lib/version'
+import { IDLE_INSTALL, type InstallProgress } from '../lib/updater'
 
 export type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -65,6 +66,10 @@ export interface AppState {
   /** Lifecycle of the version check, so a failed fetch is never shown as current. */
   updateStatus: UpdateStatus
   updateDismissed: string | null
+  /** Whether this install can update itself in place (NSIS install / .app bundle). */
+  updaterSupported: boolean
+  /** Progress of an in-app update once the user starts one. */
+  updateInstall: InstallProgress
 }
 
 /** setState-style action: a partial patch or an updater that derives one from current state. */
@@ -125,5 +130,7 @@ export function makeInitialState(): AppState {
     update: null,
     updateStatus: 'idle',
     updateDismissed: saved.dismissedVersion ?? null,
+    updaterSupported: false,
+    updateInstall: IDLE_INSTALL,
   }
 }

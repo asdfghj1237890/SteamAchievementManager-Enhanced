@@ -10,12 +10,14 @@
 
 ## Current Tracked Concerns
 
-- **[安全/需決策] 更新流程無簽章驗證**（唯一仍開放項）：`latest_version()` 僅抓版本字串、`open_releases()` 開固定 GitHub Releases 頁供手動下載未簽章安裝檔（無 tauri-plugin-updater / pubkey）。需簽章金鑰 + CI 變更，屬 secops 決策，未自動實作。註：`open_releases` URL 為寫死，偽造的 latest.json 只能改顯示的版本字串、無法改下載目的地。
+- **[安全/需決策] 發佈檔沒有作業系統層程式碼簽章**（唯一仍開放項）：Windows exe/installer 未做 Authenticode，macOS 未做 Developer ID 簽章與 notarization，release notes 教使用者繞過 Gatekeeper。**app 內更新已於 2026-09-10 改為 tauri-plugin-updater + minisign 驗簽**（見下方 Recently Fixed），所以此項只剩「手動下載的檔案」這一段沒有保護；補齊需要付費憑證（Apple Developer ID、Authenticode 或 Azure Trusted Signing），屬 secops 決策，未自動實作。
 - **[架構/已評估不做] `SteamClientApi` 統一 trait**：win/mac 的 client contract 其實已由對稱、cfg-gated 的 free functions（`read_game`/`write_game`/`list_owned` 各自呼叫該平台 client 的方法）在編譯期釘住——任一平台方法或簽章 drift 會直接讓該平台的 free function 編譯失敗。額外 trait 只是重複 forwarding boilerplate，不增安全性；stub 刻意精簡（其 free functions 直接回 Err，不經 client 方法）。故不新增。
 
 （原先此處列的 `saved<n` 誤判、completion 雙來源、bulk/reset+關窗未存提醒、aria-label 寫死——皆已於下方 deferred-fix batch 修復。）
 
 ## Recently Fixed
+
+- **(2026-09-10 in-app updater + minisign + SHA-256)** 使用者指示實作。`tauri-plugin-updater` 2.11 + `tauri-plugin-process` 註冊於 `src-tauri/src/lib.rs`，capabilities 加 `updater:default`/`process:default`，`tauri.conf.json` 加 `bundle.createUpdaterArtifacts` 與 `plugins.updater`（pubkey + 固定 endpoint `releases/latest/download/latest.json`）。**私鑰不在 repo**：在維護者 `~/.tauri/sam-enhanced-updater.key`（+ `.password`），CI 透過 secrets `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 簽署；缺 secret 時 release build 明確失敗，不會靜默跳過。`release.yml` 改為：Windows 同一次 build 產出 portable exe + NSIS installer（+ `.sig`），macOS 產出 dmg + `.app.tar.gz`（+ `.sig`），release job 用 jq 組 `latest.json`（version / pub_date / platforms 的 url 與 signature）並附 `SHA256SUMS.txt`；master 上的 `latest.json` bump job 保留給 <1.4 的舊 client。前端：`updater_supported` command 判斷是否為 NSIS 安裝（exe 旁有 `uninstall.exe`）或 macOS `.app`，是則 banner/設定頁按鈕走 app 內下載→驗簽→安裝→relaunch（`lib/updater.ts` 純 reducer 處理進度，附測試），portable exe 仍走開 Releases 頁。`latest_version` 改讀 release 資產的 manifest。新增 i18n `update.install/downloading/installing/installFailed/noPackage`（10 語系）。
 
 - **(2026-08-04 React 19 + react-router 8)** 使用者指示升級。原本掛在 tracked concerns 的 `GHSA-qwww-vcr4-c8h2`（react-router RSC Mode CSRF）**改為真正修復，不再是「判定不可達所以接受」**：
   - `react`/`react-dom` 18.3.1 → 19.2.8（含 `@types`）。**零程式碼改動**——沒用到 v19 移除的 `ReactDOM.render`、PropTypes、string refs，`createRoot` 一路沿用。

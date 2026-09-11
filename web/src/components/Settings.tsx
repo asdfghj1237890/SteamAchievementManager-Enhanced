@@ -4,6 +4,7 @@ import { LANGS, type I18nKey, type Lang } from '../i18n'
 import type { Theme } from '../types'
 import { updateView } from '../lib/version'
 import Seg from './ui/Seg'
+import { useUpdateAction } from './ui/useUpdateAction'
 
 const THEME_OPTS: [Theme, string, I18nKey][] = [
   ['dark', '☾', 'theme.dark'],
@@ -36,7 +37,8 @@ function SettingRow({
 }
 
 export default function Settings() {
-  const { state, t, set, openReleases } = useApp()
+  const { state, t, set } = useApp()
+  const updateAction = useUpdateAction()
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '26px 28px', minHeight: 0 }}>
@@ -88,14 +90,15 @@ export default function Settings() {
             if (view === 'available') {
               return (
                 <button
-                  onClick={openReleases}
+                  onClick={updateAction.onClick}
+                  disabled={updateAction.busy}
                   style={{
                     padding: '7px 15px', borderRadius: 'var(--radius)', border: '1px solid var(--bd)',
                     background: 'var(--s0)', color: 'var(--t1)', fontSize: '13px', fontWeight: 600,
-                    cursor: 'pointer',
+                    cursor: updateAction.busy ? 'wait' : 'pointer', opacity: updateAction.busy ? 0.6 : 1,
                   }}
                 >
-                  {t('update.available', { version: state.update?.latest ?? '' })} · {t('update.download')}
+                  {updateAction.status} · {updateAction.buttonLabel}
                 </button>
               )
             }

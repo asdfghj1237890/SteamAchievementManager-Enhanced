@@ -63,17 +63,34 @@ jobs:
       - name: Install frontend dependencies
         working-directory: web
         run: npm ci
-      # Portable single .exe — --no-bundle skips the NSIS/MSI installers, leaving
-      # just target/release/app.exe.
-      - name: Build portable executable (release, no installer)
+      - name: Require the updater signing key
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Release packages must be minisign-signed for the in-app updater — add the private key and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets (see web/TESTING.md, Releases and updates)."
+            exit 1
+          fi
+      # Two Windows assets from one build: the portable single .exe
+      # (target/release/app.exe) and the NSIS installer the in-app updater installs
+      # from. createUpdaterArtifacts signs the installer with the minisign key and
+      # writes the .sig next to it; the build fails if the key is missing.
+      - name: Build portable executable and signed NSIS installer
         working-directory: web
         shell: bash
-        run: npm run tauri -- build --no-bundle
-      - name: Upload exe artifact
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --bundles nsis
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-exe
-          path: web/src-tauri/target/release/app.exe
+          name: windows
+          path: |
+            web/src-tauri/target/release/app.exe
+            web/src-tauri/target/release/bundle/nsis/*-setup.exe
+            web/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
           if-no-files-found: error
 
   build-macos:
@@ -95,16 +112,31 @@ jobs:
       - name: Install frontend dependencies
         working-directory: web
         run: npm ci
-      # Bundles "SAM Enhanced.app" into a .dmg. Host target on macos-latest is
+      - name: Require the updater signing key
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Release packages must be minisign-signed for the in-app updater — add the private key and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets (see web/TESTING.md, Releases and updates)."
+            exit 1
+          fi
+      # Bundles "SAM Enhanced.app" into a .dmg for manual installs, plus the signed
+      # .app.tar.gz the in-app updater installs from. Host target on macos-latest is
       # aarch64-apple-darwin, so this is an Apple Silicon build.
-      - name: Build .dmg (release, Apple Silicon)
+      - name: Build .dmg and signed updater bundle (release, Apple Silicon)
         working-directory: web
-        run: npm run tauri -- build --bundles dmg
-      - name: Upload dmg artifact
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --bundles app dmg
+      - name: Upload macOS artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: macos-dmg
-          path: web/src-tauri/target/release/bundle/dmg/*.dmg
+          name: macos
+          path: |
+            web/src-tauri/target/release/bundle/dmg/*.dmg
+            web/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            web/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
           if-no-files-found: error
 
   release:
@@ -116,19 +148,53 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: artifacts # -> artifacts/windows-exe/app.exe, artifacts/macos-dmg/*.dmg
+          path: artifacts # -> artifacts/windows/**, artifacts/macos/**
 
-      - name: Stage release assets
+      # Assets get tag-stamped names; the updater manifest below points at the
+      # renamed files, so the names and the manifest can never drift apart.
+      - name: Stage release assets, updater manifest, and checksums
         id: stage
         run: |
+          set -euo pipefail
           tag="${{ github.event.inputs.tag || github.ref_name }}"
-          win="SteamAchievementManager-Enhanced-${tag}-windows-x64.exe"
-          mac="SteamAchievementManager-Enhanced-${tag}-macos-arm64.dmg"
-          cp artifacts/windows-exe/app.exe "$win"
-          cp artifacts/macos-dmg/*.dmg "$mac"
+          version="${tag#v}"
+          base="SteamAchievementManager-Enhanced-${tag}"
+          win="${base}-windows-x64.exe"
+          win_setup="${base}-windows-x64-setup.exe"
+          mac="${base}-macos-arm64.dmg"
+          mac_bundle="${base}-macos-arm64.app.tar.gz"
+          one() { local f; f=$(find "$1" -type f -name "$2" | head -1); [ -n "$f" ] || { echo "::error::no $2 under $1"; exit 1; }; printf '%s' "$f"; }
+          cp "$(one artifacts/windows 'app.exe')" "$win"
+          cp "$(one artifacts/windows '*-setup.exe')" "$win_setup"
+          cp "$(one artifacts/windows '*-setup.exe.sig')" "$win_setup.sig"
+          cp "$(one artifacts/macos '*.dmg')" "$mac"
+          cp "$(one artifacts/macos '*.app.tar.gz')" "$mac_bundle"
+          cp "$(one artifacts/macos '*.app.tar.gz.sig')" "$mac_bundle.sig"
+
+          # Updater manifest (Tauri v2 static JSON): the app fetches it from
+          # releases/latest/download/latest.json, verifies the package signature
+          # against the public key built into the app, and only then installs.
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          jq -n \
+            --arg version "$version" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notes "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}" \
+            --arg win_url "$url/$win_setup" --rawfile win_sig "$win_setup.sig" \
+            --arg mac_url "$url/$mac_bundle" --rawfile mac_sig "$mac_bundle.sig" \
+            '{
+              version: $version, pub_date: $date, notes: $notes,
+              platforms: {
+                "windows-x86_64": { url: $win_url, signature: ($win_sig | rtrimstr("\n")) },
+                "darwin-aarch64": { url: $mac_url, signature: ($mac_sig | rtrimstr("\n")) }
+              }
+            }' > latest.json
+
+          # SHA-256 of every asset, for anyone verifying a manual download.
+          sha256sum "$win" "$win_setup" "$win_setup.sig" "$mac" "$mac_bundle" "$mac_bundle.sig" latest.json > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "win=$win" >> "$GITHUB_OUTPUT"
-          echo "mac=$mac" >> "$GITHUB_OUTPUT"
+          echo "assets=$win $win_setup $win_setup.sig $mac $mac_bundle $mac_bundle.sig latest.json SHA256SUMS.txt" >> "$GITHUB_OUTPUT"
 
       # Single publisher, so a plain exists-check is race-free. Re-runnable: an
       # existing release (e.g. manual dispatch on an old tag) gets its assets
@@ -138,19 +204,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ steps.stage.outputs.tag }}"
-          win="${{ steps.stage.outputs.win }}"
-          mac="${{ steps.stage.outputs.mac }}"
-          notes=$'Cross-platform build.\n\n## Windows (portable)\nDownload the `.exe` and double-click it — no installation. Requires Windows 10/11 with the WebView2 runtime (preinstalled on current Windows).\n\n## macOS (Apple Silicon)\nDownload the `.dmg`, open it, and drag `SAM Enhanced` into Applications. This build is **unsigned**, so on first launch right-click the app -> Open -> Open, or run `xattr -cr "/Applications/SAM Enhanced.app"` once.\n\nBoth require Steam installed, running, and logged in.\n\n⚠️ This writes to your real Steam account when you unlock achievements or edit stats.'
+          assets="${{ steps.stage.outputs.assets }}"
+          notes=$'Cross-platform build.\n\n## Windows\n- **Installer** (`…-windows-x64-setup.exe`, recommended): per-user install, no admin rights needed. From this version on it updates itself from inside the app.\n- **Portable** (`…-windows-x64.exe`): double-click it — no installation. A portable copy cannot update itself; the app offers this page instead.\n\nBoth need Windows 10/11 with the WebView2 runtime (preinstalled on current Windows).\n\n## macOS (Apple Silicon)\nDownload the `.dmg`, open it, and drag `SAM Enhanced` into Applications. This build is **unsigned**, so on first launch right-click the app -> Open -> Open, or run `xattr -cr "/Applications/SAM Enhanced.app"` once. Once installed it updates itself from inside the app.\n\n## Verifying a download\n`SHA256SUMS.txt` lists the SHA-256 of every asset. Windows: `certutil -hashfile <file> SHA256`. macOS: `shasum -a 256 <file>`. In-app updates are verified automatically: each package carries a minisign signature (`.sig`) that the app checks against the public key built into it before installing.\n\nBoth platforms require Steam installed, running, and logged in.\n\n⚠️ This writes to your real Steam account when you unlock achievements or edit stats.'
           # This job has no checkout, so gh has no local git remote to infer the
           # repo from — pass it explicitly or `gh release` fails with
           # "not a git repository".
           repo="$GITHUB_REPOSITORY"
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
             echo "Release $tag exists — uploading assets."
-            gh release upload "$tag" "$win" "$mac" --repo "$repo" --clobber
+            # shellcheck disable=SC2086 # intentional word splitting of the asset list
+            gh release upload "$tag" $assets --repo "$repo" --clobber
           else
             echo "Creating release $tag."
-            gh release create "$tag" "$win" "$mac" --repo "$repo" --title "$tag" --notes "$notes"
+            # shellcheck disable=SC2086
+            gh release create "$tag" $assets --repo "$repo" --title "$tag" --notes "$notes"
           fi
 
   bump-latest-json:

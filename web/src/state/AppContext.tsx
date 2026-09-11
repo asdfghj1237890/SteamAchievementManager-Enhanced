@@ -14,8 +14,9 @@ import { touchDetailCache } from './detailCache'
 import { appIdKey, mergeFreshGames } from './gameListMerge'
 import { progressIdsToRequest } from './progressBatch'
 import { getVersion } from '@tauri-apps/api/app'
-import { fetchLatestVersion, openReleasesPage } from '../data/update'
+import { fetchLatestVersion, installLatestUpdate, openReleasesPage, updaterSupported } from '../data/update'
 import { isNewer } from '../lib/version'
+import { applyDownloadEvent, installBusy, IDLE_INSTALL } from '../lib/updater'
 import { rootCssVars, styleTokens, themeTokens } from '../lib/theme'
 import {
   bulkApply, completionFlat, filteredAch, pendingCount, type BulkMode,
@@ -71,6 +72,8 @@ interface AppContextValue {
   completionFor: (appId: string) => GameCompletion | undefined
   dismissUpdate: () => void
   openReleases: () => void
+  /** Download, verify, and install the latest release in place, then relaunch. */
+  installUpdate: () => void
   /** The active confirmation request, or null when the modal is closed. */
   confirm: ConfirmRequest | null
   /** Open the confirmation modal with the given request. */
@@ -217,7 +220,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // instead of falsely reporting "up to date".
           updateStatus = 'error'
         }
-        if (!cancelled) dispatch({ version: current, update, updateStatus })
+        // A portable .exe cannot install over itself; it keeps the download link.
+        const supported = await updaterSupported().catch(() => false)
+        if (!cancelled) dispatch({ version: current, update, updateStatus, updaterSupported: supported })
       } catch {
         // getVersion failed — ignore
       }
@@ -573,6 +578,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void openReleasesPage()
   }, [])
 
+  // In-app update: the plugin verifies the package signature before installing; a
+  // success ends in a relaunch, so only the failure path returns to this state.
+  const installUpdate = useCallback(() => {
+    if (installBusy(stateRef.current.updateInstall)) return
+    dispatch({ updateInstall: { phase: 'downloading', received: 0, total: null } })
+    installLatestUpdate((event) =>
+      dispatch((s) => ({ updateInstall: applyDownloadEvent(s.updateInstall, event) })),
+    )
+      .then((started) => {
+        if (!started) {
+          dispatch({ updateInstall: { ...IDLE_INSTALL, phase: 'error', error: tRef.current('update.noPackage') } })
+        }
+      })
+      .catch((e) => {
+        dispatch({ updateInstall: { ...IDLE_INSTALL, phase: 'error', error: errMsg(e) } })
+      })
+  }, [])
+
   const T = useMemo(() => themeTokens(state.theme), [state.theme])
   const ST = useMemo(() => styleTokens(), [])
   const rootVars = useMemo(() => rootCssVars(T, ST, state.accent), [T, ST, state.accent])
@@ -582,7 +605,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state, t, T, ST, rootVars, games: state.games, activeGame,
     set, selectGame, openLibrary, openSettings, refresh, gotoTab, openGame,
     toggleAch, bulk, store, setStat, resetStats, showToast, completionFor,
-    dismissUpdate, openReleases,
+    dismissUpdate, openReleases, installUpdate,
     confirm, requestConfirm, confirmResolve,
   }
 

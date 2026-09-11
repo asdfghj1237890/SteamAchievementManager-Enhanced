@@ -82,6 +82,13 @@ npm run tauri -- dev
 npm run tauri -- build
 ```
 
+Releases ship a Windows installer (per-user, updates itself from inside the app),
+a portable Windows `.exe` (no self-update), a macOS `.dmg` (self-updates once
+installed), and `SHA256SUMS.txt`. In-app updates are minisign-signed and verified
+against a public key built into the app; see
+[`web/TESTING.md`](web/TESTING.md#releases-and-updates) for the pipeline and the
+signing key.
+
 ### Automated tests
 
 The modern app has a CI-enforced automation stack covering Vitest unit/component
