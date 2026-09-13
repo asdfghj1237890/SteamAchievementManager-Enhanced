@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::process::Command;
 use std::time::Duration;
 use steam_core::{AchChange, GameProgress, OwnedGame, StatChange};
+use tauri::Manager;
 
 const WORKER_TIMEOUT_SECS: u64 = 45;
 
@@ -374,6 +375,19 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+            // The main window is created hidden (`visible: false` in tauri.conf.json) and
+            // the frontend reveals it after its first React commit (winShow), so nobody
+            // sees WebView2's blank white page. Safety net: if the frontend never gets
+            // there (script error, blocked asset), show the window anyway after a grace
+            // period rather than leaving the app invisible.
+            if let Some(win) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(3));
+                    if !win.is_visible().unwrap_or(true) {
+                        let _ = win.show();
+                    }
+                });
             }
             Ok(())
         })

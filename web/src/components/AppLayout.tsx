@@ -1,7 +1,8 @@
-import { useLayoutEffect, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, type CSSProperties } from 'react'
 import { Outlet } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { applySidebarWidth } from '../lib/sidebarWidth'
+import { winShow } from '../lib/appWindow'
 import TitleBar from './TitleBar'
 import Sidebar from './Sidebar'
 import Resizer from './Resizer'
@@ -18,6 +19,11 @@ export default function AppLayout() {
   useLayoutEffect(() => {
     applySidebarWidth(state.sidebarWidth)
   }, [state.sidebarWidth])
+  // First commit → reveal the (hidden) OS window, see winShow. A plain effect rather
+  // than requestAnimationFrame: a window that is not yet visible may never get a frame.
+  useEffect(() => {
+    void winShow()
+  }, [])
   const root: CSSProperties = {
     ...rootVars,
     height: '100vh',

@@ -13,6 +13,8 @@
     "core:window:allow-unmaximize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "updater:default",
     "process:default"
   ]

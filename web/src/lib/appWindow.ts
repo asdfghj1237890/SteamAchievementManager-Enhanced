@@ -21,3 +21,14 @@ export async function winClose(): Promise<void> {
   if (!isTauri()) return
   await (await current()).close()
 }
+
+// The window is created hidden (tauri.conf.json `visible: false`) so the OS never
+// shows WebView2's blank white page while the bundle loads. AppLayout calls this
+// after its first commit, so the first frame the user sees is the painted shell.
+// lib.rs has a timed fallback in case the frontend never gets here.
+export async function winShow(): Promise<void> {
+  if (!isTauri()) return
+  const win = await current()
+  await win.show()
+  await win.setFocus()
+}
