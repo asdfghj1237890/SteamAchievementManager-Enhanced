@@ -10,6 +10,13 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # vitest and @vitest/* pin each other as exact-version peers, so a major
+      # bump has to land in one PR (#43 and #44 could never pass alone; see #45).
+      # Listed first so it takes precedence over the dev-dependencies group.
+      vitest:
+        patterns:
+          - vitest
+          - "@vitest/*"
       dev-dependencies:
         dependency-type: development
         update-types:
