@@ -32,10 +32,12 @@ export default function ConfirmDialog() {
     position: 'fixed', inset: 0, zIndex: 1000, display: 'flex',
     alignItems: 'center', justifyContent: 'center', padding: '24px',
     background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(2px)',
+    animation: 'dcFadeIn var(--m-fast) ease-out both',
   }
   const card: CSSProperties = {
     width: 'min(420px, 100%)', background: 'var(--s1)', border: '1px solid var(--bd)',
     borderRadius: 'var(--radius-lg)', boxShadow: 'var(--elev)', padding: '22px', color: 'var(--t1)',
+    animation: 'dcScaleIn var(--m-base) var(--m-ease) both',
   }
   const btnBase: CSSProperties = {
     padding: '8px 16px', borderRadius: 'var(--radius)', fontSize: '13px', fontWeight: 600,

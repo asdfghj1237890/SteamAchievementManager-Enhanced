@@ -106,7 +106,7 @@ export function enrichAchievement(g: Game, a: Achievement, t: Translate, savedUn
     rowStyle: {
       display: 'flex', alignItems: 'center', gap: '12px',
       padding: 'calc(var(--cardpad) - 3px) var(--cardpad)', borderBottom: '1px solid var(--bds)',
-      cursor: 'pointer', opacity: a.unlocked ? 1 : 0.84, transition: 'background .12s',
+      cursor: 'pointer', opacity: a.unlocked ? 1 : 0.84, transition: 'background var(--m-fast), opacity var(--m-fast)',
     },
     checkStyle: a.unlocked
       ? { ...ckBase, background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-ink)' }

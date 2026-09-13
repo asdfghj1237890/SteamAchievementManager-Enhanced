@@ -21,7 +21,7 @@ function WinCtrl({
     width: '46px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
     color: hover ? (close ? '#fff' : 'var(--t1)') : 'var(--t2)',
     background: hover ? (close ? '#e81123' : 'var(--s3)') : 'transparent',
-    transition: 'background .12s, color .12s',
+    transition: 'background var(--m-fast), color var(--m-fast)',
   }
   return (
     <div style={style} {...hoverProps} onMouseDown={noDrag} onClick={onClick} role="button" aria-label={label}>
@@ -58,7 +58,7 @@ function MacDot({
       <span
         style={{
           fontSize: '10px', fontWeight: 900, lineHeight: 1, color: 'rgba(0,0,0,.72)',
-          opacity: show ? 1 : 0, transition: 'opacity .12s', pointerEvents: 'none',
+          opacity: show ? 1 : 0, transition: 'opacity var(--m-fast)', pointerEvents: 'none',
         }}
       >
         {glyph}

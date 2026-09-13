@@ -97,7 +97,7 @@ export default function Achievements() {
     border: '1px solid ' + (pending > 0 ? 'var(--accent)' : 'var(--bd)'),
     background: pending > 0 ? 'var(--accent)' : 'var(--s2)', color: pending > 0 ? 'var(--accent-ink)' : 'var(--t3)',
     cursor: pending > 0 ? 'pointer' : 'default', fontSize: '13px', fontWeight: 700, fontFamily: 'inherit',
-    boxShadow: pending > 0 ? '0 4px 14px -4px var(--accent)' : 'none', transition: 'all .15s',
+    boxShadow: pending > 0 ? '0 4px 14px -4px var(--accent)' : 'none', transition: 'all var(--m-base)',
   }
 
   return (
@@ -178,7 +178,7 @@ export default function Achievements() {
       {/* content */}
       <div ref={contentRef} style={{ padding: '0 22px 22px' }}>
         {state.view === 'grid' && (
-          <div style={{ height: grid.totalHeight, position: 'relative' }}>
+          <div className="dc-swap" style={{ height: grid.totalHeight, position: 'relative' }}>
             <div
               style={{
                 position: 'absolute', top: 0, left: 0, right: 0,
@@ -226,7 +226,7 @@ export default function Achievements() {
           </div>
         )}
         {state.view === 'list' && (
-          <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--s2)', height: rows.totalHeight, position: 'relative' }}>
+          <div className="dc-swap" style={{ border: '1px solid var(--bd)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--s2)', height: rows.totalHeight, position: 'relative' }}>
             <div
               style={{
                 position: 'absolute', left: 0, right: 0, top: 0,

@@ -12,6 +12,7 @@ export default function UpdateBanner() {
         display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 16px',
         background: 'var(--s3)', borderBottom: '1px solid var(--bd)',
         color: 'var(--t1)', fontSize: '13px',
+        animation: 'dcSlideDown var(--m-base) var(--m-ease) both',
       }}
     >
       <span role="status" aria-live="polite" style={{ flex: 1, minWidth: 0 }}>{status}</span>

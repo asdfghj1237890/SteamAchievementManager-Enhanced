@@ -1,5 +1,5 @@
 import { useEffect, type CSSProperties } from 'react'
-import { Navigate, Outlet, useParams } from 'react-router'
+import { Navigate, Outlet, useLocation, useParams } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { useVirtualScroll } from '../lib/virtual'
 import { GameScrollProvider } from './GameScroll'
@@ -39,11 +39,24 @@ export default function GameScreen() {
       <div
         ref={scroll.containerRef}
         onScroll={scroll.onScroll}
+        className="dc-page"
         style={{ flex: 1, overflowY: 'auto', minHeight: 0, '--tabbar-h': '40px' } as CSSProperties}
       >
         <GameHeader />
-        <Outlet />
+        <TabOutlet />
       </div>
     </GameScrollProvider>
+  )
+}
+
+// The tab content (achievements ↔ stats) gets its own enter transition: keyed on the
+// tab so a switch remounts the wrapper, and its own component so only it re-renders
+// on location change (GameScreen and GameHeader stay out of it).
+function TabOutlet() {
+  const { pathname } = useLocation()
+  return (
+    <div key={pathname.endsWith('/stats') ? 'stats' : 'achievements'} className="dc-swap">
+      <Outlet />
+    </div>
   )
 }

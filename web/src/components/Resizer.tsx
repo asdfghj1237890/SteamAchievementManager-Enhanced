@@ -70,7 +70,7 @@ export default function Resizer() {
         cursor: 'col-resize',
         alignSelf: 'stretch',
         background: active ? 'var(--accent)' : 'transparent',
-        transition: 'background .12s',
+        transition: 'background var(--m-fast)',
       }}
     />
   )

@@ -41,7 +41,7 @@ export default function Settings() {
   const updateAction = useUpdateAction()
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '26px 28px', minHeight: 0 }}>
+    <div className="dc-page" style={{ flex: 1, overflowY: 'auto', padding: '26px 28px', minHeight: 0 }}>
       <h2 style={{ margin: '0 0 4px', fontSize: '22px', fontWeight: 700, letterSpacing: '-.3px', color: 'var(--t1)' }}>
         {t('nav.settings')}
       </h2>

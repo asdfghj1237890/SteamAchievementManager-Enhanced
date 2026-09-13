@@ -47,7 +47,7 @@ export default memo(function GameHeader() {
   const barStyle: CSSProperties = {
     width: pct + '%', height: '100%', borderRadius: '999px',
     background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 45%, var(--good)))',
-    transition: 'width .35s',
+    transition: 'width var(--m-slow)',
   }
 
   return (
@@ -70,7 +70,7 @@ export default memo(function GameHeader() {
               onError={onHeroError}
               style={{
                 position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
-                objectPosition: 'center 35%', zIndex: 0, opacity: heroLoaded ? 1 : 0, transition: 'opacity .35s',
+                objectPosition: 'center 35%', zIndex: 0, opacity: heroLoaded ? 1 : 0, transition: 'opacity var(--m-slow)',
               }}
             />
           )}
@@ -123,7 +123,7 @@ export default memo(function GameHeader() {
               cursor: 'pointer', fontSize: '14px', fontWeight: 600, fontFamily: 'inherit',
               color: currentTab === k ? 'var(--t1)' : 'var(--t3)',
               borderBottom: '2px solid ' + (currentTab === k ? 'var(--accent)' : 'transparent'),
-              transition: 'color .15s',
+              transition: 'color var(--m-base)',
             }}
           >
             {t(label)}

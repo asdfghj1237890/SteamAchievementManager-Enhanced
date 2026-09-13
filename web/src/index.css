@@ -1,6 +1,23 @@
 /* Global base — ported verbatim from the Claude Design handoff <helmet> styles.
    All color/size tokens are CSS custom properties set on .dc-root (see theme.ts). */
 
+/* Motion tokens. Every transition/animation in the app uses these, so one media
+   query turns motion off for users who asked for it (the loading spinner keeps
+   its own literal duration on purpose). */
+:root {
+  --m-fast: 120ms;
+  --m-base: 160ms;
+  --m-slow: 260ms;
+  --m-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --m-fast: 0ms;
+    --m-base: 0ms;
+    --m-slow: 0ms;
+  }
+}
+
 * {
   box-sizing: border-box;
   -webkit-user-select: none;
@@ -53,4 +70,62 @@ input::placeholder {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* App shell fade-in. The OS window is created hidden and shown right after
+   AppLayout's first commit (winShow), so this plays as the window appears.
+   Direct children only: the root keeps var(--win) painted from the first frame,
+   so the light theme never shows the dark window backgroundColor through a
+   transparent shell. Mount-only: the root's children persist across routes. */
+@keyframes dcFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.dc-root > * {
+  animation: dcFadeIn var(--m-base) ease-out both;
+}
+
+/* In-app enter transitions. .dc-page: a screen coming in (library, game, settings),
+   fade + 6px rise. .dc-swap: sibling content replacing sibling content (achievement
+   tabs, cards/list), fade only. Both are mount-only, so keying the element on the
+   thing that changed is what replays them. */
+@keyframes dcPageIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes dcScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes dcSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dc-page {
+  animation: dcPageIn var(--m-base) var(--m-ease) both;
+}
+.dc-swap {
+  animation: dcFadeIn var(--m-base) ease-out both;
 }

@@ -7,7 +7,7 @@ export const segBase: CSSProperties = {
   padding: '7px 13px', borderRadius: 'var(--radius)', borderWidth: '1px',
   borderStyle: 'solid', borderColor: 'var(--bd)',
   background: 'transparent', color: 'var(--t2)', cursor: 'pointer', fontSize: '12.5px',
-  fontWeight: 600, fontFamily: 'inherit', lineHeight: 1.2, transition: 'all .15s',
+  fontWeight: 600, fontFamily: 'inherit', lineHeight: 1.2, transition: 'all var(--m-base)',
 }
 
 export const segOn: CSSProperties = {
@@ -20,14 +20,14 @@ export const ghost: CSSProperties = { ...segBase, padding: '7px 12px', color: 'v
 export const ckBase: CSSProperties = {
   width: '22px', height: '22px', flex: '0 0 auto', borderRadius: '6px', display: 'flex',
   alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '13px',
-  fontWeight: 800, transition: 'all .15s', borderWidth: '1.5px', borderStyle: 'solid',
+  fontWeight: 800, transition: 'all var(--m-base)', borderWidth: '1.5px', borderStyle: 'solid',
   borderColor: 'var(--t3)', color: '#fff',
 }
 
 export const CARD_BASE: CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: '10px', padding: 'var(--cardpad)',
   borderRadius: 'var(--radius-lg)', border: '1px solid var(--bd)', background: 'var(--s2)',
-  position: 'relative', transition: 'border-color .15s, transform .12s', boxShadow: 'var(--elev)',
+  position: 'relative', transition: 'border-color var(--m-base), transform var(--m-fast), opacity var(--m-fast), background var(--m-fast)', boxShadow: 'var(--elev)',
 }
 
 /** Striped gradient cover placeholder, parameterized by hue (matches the design). */

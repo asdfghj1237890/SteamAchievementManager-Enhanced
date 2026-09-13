@@ -36,7 +36,7 @@ export default function AppLayout() {
     fontFamily: "'IBM Plex Sans','Noto Sans TC',system-ui,sans-serif",
   }
   return (
-    <div style={root}>
+    <div className="dc-root" style={root}>
       <TitleBar />
       <UpdateBanner />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>

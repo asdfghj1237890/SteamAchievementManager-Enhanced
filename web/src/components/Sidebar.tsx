@@ -48,7 +48,7 @@ const SidebarRow = memo(function SidebarRow({
     cursor: 'pointer', height: ROW_ITEM_HEIGHT, boxSizing: 'border-box',
     border: '1px solid ' + (selected ? 'color-mix(in srgb, var(--accent) 45%, var(--bd))' : 'transparent'),
     background: selected ? 'color-mix(in srgb, var(--accent) 13%, transparent)' : 'transparent',
-    transition: 'background .15s',
+    transition: 'background var(--m-base)',
   }
   const coverStyle: CSSProperties = {
     width: '80px', height: '37px', borderRadius: '5px', flex: '0 0 auto', position: 'relative',
@@ -59,7 +59,7 @@ const SidebarRow = memo(function SidebarRow({
   }
   const barStyle: CSSProperties = {
     width: pct + '%', height: '100%', borderRadius: '999px',
-    background: selected ? 'var(--accent)' : 'var(--t3)', transition: 'width .3s',
+    background: selected ? 'var(--accent)' : 'var(--t3)', transition: 'width var(--m-slow)',
   }
   return (
     <div

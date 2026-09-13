@@ -35,7 +35,7 @@ const LibraryCard = memo(function LibraryCard({
     display: 'flex', flexDirection: 'column', borderRadius: 'var(--radius-lg)', overflow: 'hidden',
     border: '1px solid ' + (hover ? 'color-mix(in srgb, var(--accent) 42%, var(--bd))' : 'var(--bd)'),
     background: 'var(--s2)', cursor: 'pointer', boxShadow: 'var(--elev)',
-    transition: 'border-color .15s, transform .15s', transform: hover ? 'translateY(-2px)' : 'none',
+    transition: 'border-color var(--m-base), transform var(--m-base)', transform: hover ? 'translateY(-2px)' : 'none',
     height: CARD_HEIGHT, boxSizing: 'border-box',
   }
   const capsuleStyle: CSSProperties = {
@@ -47,7 +47,7 @@ const LibraryCard = memo(function LibraryCard({
   const fillStyle: CSSProperties = {
     width: pct + '%', height: '100%', borderRadius: '999px',
     background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 50%, var(--good)))',
-    transition: 'width .3s',
+    transition: 'width var(--m-slow)',
   }
 
   return (
@@ -120,6 +120,7 @@ export default function Library() {
       ref={virtual.containerRef}
       onScroll={virtual.onScroll}
       data-testid="library-screen"
+      className="dc-page"
       style={{ flex: 1, overflowY: 'auto', padding: '22px 24px 26px', minHeight: 0 }}
     >
       <div style={{ marginBottom: '18px' }}>
