@@ -30,7 +30,7 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.11.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react-dom": "^19.3.0",
     "react-router": "^8.3.1"
   },
   "devDependencies": {
@@ -42,7 +42,7 @@
     "@testing-library/user-event": "14.6.7",
     "@types/node": "26.5.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "@vitest/coverage-v8": "5.0.0",
     "jsdom": "30.0.1",
