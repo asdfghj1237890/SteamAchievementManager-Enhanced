@@ -17,6 +17,15 @@ updates:
         patterns:
           - vitest
           - "@vitest/*"
+      # react and react-dom must be the exact same version at runtime (React throws
+      # "Incompatible React versions" otherwise), so a bump has to move both plus their
+      # @types packages in one PR (#49 and #50 arrived split; #49 could not pass alone).
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
       dev-dependencies:
         dependency-type: development
         update-types:
