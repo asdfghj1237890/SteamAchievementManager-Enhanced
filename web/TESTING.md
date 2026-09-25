@@ -153,6 +153,15 @@ single publish step. Every release carries:
 | `latest.json` | Updater manifest: version, per-platform package URL and minisign signature |
 | `SHA256SUMS.txt` | SHA-256 of every asset above, for verifying a manual download |
 
+**The .dmg install window.** Its layout (background, icon positions) comes from
+`bundle.macOS.dmg` in `tauri.conf.json` and is applied by a Finder AppleScript
+that Tauri skips under `CI=true`; the release job sets
+`TAURI_BUNDLER_DMG_IGNORE_CI=true` and then fails if the mounted image has no
+Finder layout. The background is `src-tauri/dmg/background.svg`, rendered to a
+1x + 2x `background.tiff` by `node scripts/dmg-background.mjs` (macOS). Keep it
+light: over a background picture Finder draws the icon labels in black, even in
+Dark Mode.
+
 **How the in-app update is protected.** `tauri-plugin-updater` fetches
 `releases/latest/download/latest.json` from the fixed endpoint in
 `tauri.conf.json`, downloads the package for the running platform, and verifies

@@ -39,6 +39,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "dmg": {
+        "background": "dmg/background.tiff",
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 170, "y": 140 },
+        "applicationFolderPosition": { "x": 490, "y": 140 }
+      }
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
