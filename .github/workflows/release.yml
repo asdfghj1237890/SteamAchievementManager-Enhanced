@@ -123,12 +123,31 @@ jobs:
       # Bundles "SAM Enhanced.app" into a .dmg for manual installs, plus the signed
       # .app.tar.gz the in-app updater installs from. Host target on macos-latest is
       # aarch64-apple-darwin, so this is an Apple Silicon build.
+      # The .dmg window layout (background, icon positions from bundle.macOS.dmg) is
+      # applied by an AppleScript that drives Finder. Tauri skips that script whenever
+      # CI=true, which ships a bare, default-sized window; TAURI_BUNDLER_DMG_IGNORE_CI
+      # turns it back on. The timeout guards against a Finder AppleEvent that hangs.
       - name: Build .dmg and signed updater bundle (release, Apple Silicon)
         working-directory: web
+        timeout-minutes: 45
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_BUNDLER_DMG_IGNORE_CI: 'true'
         run: npm run tauri -- build --bundles app dmg
+      # Finder writes the layout into the volume's .DS_Store. No .DS_Store (or one that
+      # does not reference the background) means the AppleScript silently did not run.
+      - name: Verify the .dmg window layout was applied
+        working-directory: web/src-tauri/target/release/bundle/dmg
+        run: |
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" *.dmg >/dev/null
+          trap 'hdiutil detach "$mnt" -quiet' EXIT
+          if [ ! -f "$mnt/.background/background.tiff" ] || ! grep -qa 'background.tiff' "$mnt/.DS_Store" 2>/dev/null; then
+            echo "::error::The .dmg has no Finder layout (background/icon positions) — the DMG AppleScript did not run."
+            exit 1
+          fi
+          echo "dmg layout OK"
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
