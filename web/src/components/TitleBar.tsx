@@ -3,6 +3,7 @@ import { useLocation } from 'react-router'
 import { useApp } from '../state/AppContext'
 import { useHover } from '../lib/useHover'
 import { winClose, winMinimize, winToggleMaximize } from '../lib/appWindow'
+import { isTauri } from '../data'
 import BrandMark from './ui/BrandMark'
 
 // Stop drag-region mousedown so the control still registers a click.
@@ -38,31 +39,42 @@ const winIcon = (paths: ReactNode): ReactNode => (
   </svg>
 )
 
-function MacDot({
-  bg, glyph, show, onClick,
-}: {
-  bg: string
-  glyph: string
-  show: boolean
-  onClick: () => void
-}) {
+// macOS window-control metrics, measured from AppKit on macOS 26/27 with the unified
+// toolbar macos_chrome.rs installs: 14pt buttons, 19pt leading inset, 9pt apart,
+// centred in a 52pt toolbar row. The desktop app shows the real, native buttons; these
+// only apply to the web demo's stand-ins and to the row height both share.
+const MAC_BAR_H = 52
+const MAC_DOT = 14
+const MAC_DOT_INSET = 19
+const MAC_DOT_GAP = 9
+
+// Web-demo stand-ins for the traffic lights (decorative: there is no OS window to
+// act on). Glyphs follow the native ones: ×, − and the zoom button's full-screen arrows.
+const macGlyphs = {
+  close: <path d="M4 4l6 6M10 4l-6 6" strokeWidth="1.3" strokeLinecap="round" />,
+  minimize: <path d="M3.5 7h7" strokeWidth="1.3" strokeLinecap="round" />,
+  zoom: (
+    <g stroke="none">
+      <path d="M4 4h4.6L4 8.6z" />
+      <path d="M10 10H5.4L10 5.4z" />
+    </g>
+  ),
+}
+
+function MacDot({ bg, ink, glyph, show }: { bg: string; ink: string; glyph: keyof typeof macGlyphs; show: boolean }) {
   return (
     <span
-      onMouseDown={noDrag}
-      onClick={onClick}
       style={{
-        width: '12px', height: '12px', borderRadius: '50%', background: bg, cursor: 'pointer',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: `${MAC_DOT}px`, height: `${MAC_DOT}px`, borderRadius: '50%', background: bg,
+        boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,.14)', display: 'flex',
       }}
     >
-      <span
-        style={{
-          fontSize: '10px', fontWeight: 900, lineHeight: 1, color: 'rgba(0,0,0,.72)',
-          opacity: show ? 1 : 0, transition: 'opacity var(--m-fast)', pointerEvents: 'none',
-        }}
+      <svg
+        width={MAC_DOT} height={MAC_DOT} viewBox="0 0 14 14" fill={ink} stroke={ink}
+        style={{ opacity: show ? 1 : 0, transition: 'opacity var(--m-fast)' }}
       >
-        {glyph}
-      </span>
+        {macGlyphs[glyph]}
+      </svg>
     </span>
   )
 }
@@ -85,15 +97,20 @@ export default function TitleBar() {
       <div
         data-tauri-drag-region=""
         style={{
-          height: '44px', flex: '0 0 auto', display: 'flex', alignItems: 'center', padding: '0 16px',
-          background: 'var(--win)', borderBottom: '1px solid var(--bd)', position: 'relative',
+          // +1: the row itself is MAC_BAR_H, the bottom border sits below it.
+          height: `${MAC_BAR_H + 1}px`, flex: '0 0 auto', display: 'flex', alignItems: 'center',
+          paddingLeft: `${MAC_DOT_INSET}px`, background: 'var(--win)', borderBottom: '1px solid var(--bd)',
+          position: 'relative',
         }}
       >
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }} {...dotsHoverProps}>
-          <MacDot bg="#ff5f57" glyph="✕" show={dotsHover} onClick={winClose} />
-          <MacDot bg="#febc2e" glyph="−" show={dotsHover} onClick={winMinimize} />
-          <MacDot bg="#28c840" glyph="+" show={dotsHover} onClick={winToggleMaximize} />
-        </div>
+        {/* In the desktop app AppKit draws the real traffic lights over this row. */}
+        {!isTauri() && (
+          <div aria-hidden style={{ display: 'flex', gap: `${MAC_DOT_GAP}px` }} {...dotsHoverProps}>
+            <MacDot bg="#ff5f57" ink="#4d0000" glyph="close" show={dotsHover} />
+            <MacDot bg="#febc2e" ink="#995700" glyph="minimize" show={dotsHover} />
+            <MacDot bg="#28c840" ink="#006500" glyph="zoom" show={dotsHover} />
+          </div>
+        )}
         <div
           style={{
             position: 'absolute', left: 0, right: 0, textAlign: 'center', fontSize: '12.5px',

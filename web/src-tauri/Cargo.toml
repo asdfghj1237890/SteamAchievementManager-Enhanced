@@ -43,6 +43,11 @@ ureq = "3"
 tauri-plugin-updater = "2.11.0"
 tauri-plugin-process = "2.3.1"
 
+# Native window chrome on macOS (src/macos_chrome.rs). Same versions tao already uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSToolbar", "NSWindow"] }
+
 # Tauri 2.11 still constrains `urlpattern` to the 0.3 series, which depends on
 # the unmaintained UNIC crates. This compatibility package preserves the 0.3
 # version contract while re-exporting the maintained 0.6 implementation.

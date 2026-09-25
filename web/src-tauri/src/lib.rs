@@ -5,6 +5,9 @@ use std::time::Duration;
 use steam_core::{AchChange, GameProgress, OwnedGame, StatChange};
 use tauri::Manager;
 
+#[cfg(target_os = "macos")]
+mod macos_chrome;
+
 const WORKER_TIMEOUT_SECS: u64 = 45;
 
 // Upper bound on the candidate app-id list the renderer may pass to `list_games`.
@@ -382,6 +385,8 @@ pub fn run() {
             // there (script error, blocked asset), show the window anyway after a grace
             // period rather than leaving the app invisible.
             if let Some(win) = app.get_webview_window("main") {
+                #[cfg(target_os = "macos")]
+                macos_chrome::use_unified_toolbar(&win);
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(3));
                     if !win.is_visible().unwrap_or(true) {
