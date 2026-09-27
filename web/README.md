@@ -34,7 +34,7 @@ shell, otherwise `MockSource`.
 /                    遊戲庫 (library)
 /game/:appId         成就 (achievements)
 /game/:appId/stats   統計 (statistics)
-/settings            設定 (theme / window style / accent)
+/settings            設定 (theme / language / about)
 ```
 
 Library and game detail load **lazily** (games list on mount; a game's
@@ -141,7 +141,13 @@ web/
                         GameHeader, Achievements, Statistics, Settings, Toast, Panes, ui/Seg
   steam-core/          Rust: internal Steam FFI — imp (steamclient.dll, Windows)
                         + imp_macos (steamclient.dylib via dlopen) + probe/read-game bins
-  src-tauri/           Tauri v2 app: list_games / load_game / save_changes commands
+  src-tauri/           Tauri v2 app. Steam commands: list_games, load_game, save_changes,
+                        game_progress_many, game_categories, game_header; update commands:
+                        latest_version, open_releases, updater_supported
+    tauri.macos.conf.json  macOS window override (native traffic lights, overlay titlebar)
+    src/macos_chrome.rs    empty unified NSToolbar so AppKit places the traffic lights and
+                           picks the window corner radius
+    dmg/                   .dmg install-window background (svg source + rendered tiff)
 ```
 
 ## Phase 2 status & verification boundary

@@ -3,9 +3,9 @@
 [![License: zlib](https://img.shields.io/badge/License-zlib-blue.svg)](LICENSE.txt)
 ![Desktop: Windows](https://img.shields.io/badge/desktop-Windows-0078D6?logo=windows&logoColor=white)
 ![Desktop: macOS](https://img.shields.io/badge/desktop-macOS_Apple_Silicon-555555?logo=apple&logoColor=white&labelColor=333333)
-![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
-![Vite 5](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
-![TypeScript 5](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![Vite 8](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)
+![TypeScript 7](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)
 ![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)
 ![Rust](https://img.shields.io/badge/Rust-stable-CE422B?logo=rust&logoColor=white)
 ![i18n: 10 languages](https://img.shields.io/badge/i18n-10_languages-success)
@@ -48,14 +48,14 @@ The new desktop app (in [`web/`](web/)) is a ground-up modern rewrite of the SAM
 - **Statistics editor** — view and edit INT / FLOAT stats, with `protected` and `increment-only` flags honored.
 - **10-language UI** — 繁體中文 · 简体中文 · English · Español · Português · Français · Deutsch · Italiano · 日本語 · 한국어 — switchable live in Settings (game and achievement names still come from Steam in the game's language).
 - **Add by App ID** — open any game, including ones not auto-detected in your library.
-- **Polish** — light / dark theme, macOS / Windows window chrome, accent colors, a drag-resizable game list, and an instant local cache for fast launches. Every preference persists.
+- **Polish** — light / dark theme, window chrome that follows your OS (native traffic lights and rounded corners on macOS, a custom titlebar on Windows), a drag-resizable game list, and an instant local cache for fast launches. Theme, language, and game-list width persist.
 
 ## 🧱 Tech stack & architecture
 
 | Layer | Tech |
 |---|---|
-| Frontend | React 18 · Vite 5 · TypeScript · react-router (HashRouter) |
-| Desktop shell | Tauri 2 (frameless window + custom titlebar) |
+| Frontend | React 19 · Vite 8 · TypeScript 7 · react-router 8 (HashRouter) |
+| Desktop shell | Tauri 2 — Windows: frameless window + custom titlebar; macOS: overlay titlebar with native traffic lights and window corners |
 | Steam layer | [`web/steam-core`](web/steam-core) — a Rust crate that calls the internal `steamclient.dll` vtable interfaces (ported from SAM's C# interop) and parses Steam's binary KeyValues stats cache/schema |
 
 **The seam — `SamSource`.** Every screen depends on a single async `SamSource` interface, so the data backend is swappable without touching the UI:
