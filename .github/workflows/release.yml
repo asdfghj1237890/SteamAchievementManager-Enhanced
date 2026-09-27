@@ -169,6 +169,21 @@ jobs:
         with:
           path: artifacts # -> artifacts/windows/**, artifacts/macos/**
 
+      # This job otherwise has no checkout — the repo ROOT contains an unrelated
+      # latest.json (the pointer for <1.4 clients), so it stays untouched by confining
+      # this checkout to repo/ (sparse, just the script) instead of the job's default
+      # working directory, where the stage step below writes ITS OWN latest.json.
+      - name: Checkout release-manifest script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          sparse-checkout: |
+            web/scripts/release-manifest.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
       # Assets get tag-stamped names; the updater manifest below points at the
       # renamed files, so the names and the manifest can never drift apart.
       - name: Stage release assets, updater manifest, and checksums
@@ -193,20 +208,22 @@ jobs:
           # Updater manifest (Tauri v2 static JSON): the app fetches it from
           # releases/latest/download/latest.json, verifies the package signature
           # against the public key built into the app, and only then installs.
+          # Built by web/scripts/release-manifest.mjs (unit-tested in
+          # web/src/__tests__/releaseManifest.test.ts) instead of inline jq, so a
+          # mistake here — a signature with a stray newline, a platform key typo, a
+          # downgrade-guard bug — is caught locally instead of only on a real release.
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
-          jq -n \
-            --arg version "$version" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg notes "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}" \
-            --arg win_url "$url/$win_setup" --rawfile win_sig "$win_setup.sig" \
-            --arg mac_url "$url/$mac_bundle" --rawfile mac_sig "$mac_bundle.sig" \
-            '{
-              version: $version, pub_date: $date, notes: $notes,
-              platforms: {
-                "windows-x86_64": { url: $win_url, signature: ($win_sig | rtrimstr("\n")) },
-                "darwin-aarch64": { url: $mac_url, signature: ($mac_sig | rtrimstr("\n")) }
-              }
-            }' > latest.json
+          node repo/web/scripts/release-manifest.mjs build \
+            --version "$version" \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --notes "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}" \
+            --win-url "$url/$win_setup" --win-sig "$win_setup.sig" \
+            --mac-url "$url/$mac_bundle" --mac-sig "$mac_bundle.sig" \
+            > latest.json
+          # Fail closed: never publish a manifest that is empty, for another version, or
+          # missing a platform's package URL or signature.
+          jq -e --arg v "$version" '.version == $v and ([.platforms["windows-x86_64", "darwin-aarch64"] | .url, .signature | strings | length > 0] | length == 4 and all)' latest.json > /dev/null \
+            || { echo "::error::latest.json is incomplete"; cat latest.json; exit 1; }
 
           # SHA-256 of every asset, for anyone verifying a manual download.
           sha256sum "$win" "$win_setup" "$win_setup.sig" "$mac" "$mac_bundle" "$mac_bundle.sig" latest.json > SHA256SUMS.txt
@@ -253,18 +270,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: master
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
       - name: Write latest.json from the release tag and push (monotonic)
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           new="${tag#v}"
           cur=$(jq -r '.version // "0.0.0"' latest.json 2>/dev/null || echo "0.0.0")
           # Refuse to downgrade: only write when new >= cur, so re-running an older
-          # tag's release can't push an older version over a newer one.
-          highest=$(printf '%s\n%s\n' "$new" "$cur" | sort -V | tail -1)
-          if [ "$new" != "$cur" ] && [ "$highest" != "$new" ]; then
-            echo "latest.json is at $cur; refusing to write older $new."
-            exit 0
-          fi
+          # tag's release can't push an older version over a newer one. Same guard as
+          # web/scripts/release-manifest.mjs's shouldWriteVersion (unit-tested in
+          # web/src/__tests__/releaseManifest.test.ts), instead of a bare `sort -V`.
+          decision=$(node web/scripts/release-manifest.mjs check-version --new "$new" --current "$cur")
+          case "$decision" in
+            write) ;;
+            refuse)
+              echo "latest.json is at $cur; refusing to write older $new."
+              exit 0
+              ;;
+            *)
+              echo "::error::check-version gave '$decision' for $new vs $cur"
+              exit 1
+              ;;
+          esac
           printf '{ "version": "%s" }\n' "$new" > latest.json
           if git diff --quiet -- latest.json; then
             echo "latest.json already at $new — nothing to do."

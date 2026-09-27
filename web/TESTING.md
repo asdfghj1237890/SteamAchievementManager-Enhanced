@@ -172,6 +172,15 @@ manifest's `version`, so a portable copy is still told about new releases.
 `latest.json` on `master` is kept in step by the `bump-latest-json` job for
 installs older than 1.4 that still read it there.
 
+**Where the manifest comes from.** Both jobs call `scripts/release-manifest.mjs`
+(Node built-ins only): `build` writes the release's `latest.json`, which the
+release job then checks with `jq -e` for the right version and both platforms'
+URL and signature, and `check-version` prints `write` or `refuse` so the
+`master` pointer never moves backwards. Its tests live in
+`src/__tests__/releaseManifest.test.ts`. Change the manifest shape there, not in
+the workflow; the output was checked byte-for-byte against the published v1.4.1
+`latest.json`.
+
 **Signing key.** The private key never enters the repository. It lives with the
 maintainer (generated with `npm exec -- tauri signer generate -w <path>`) and in
 two repository secrets that the build jobs require:
