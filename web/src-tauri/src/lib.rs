@@ -152,8 +152,11 @@ struct WritePayload {
     stats: Vec<StatChange>,
 }
 
-#[tauri::command]
-async fn save_changes(app_id: String, changes: GameChanges) -> Result<serde_json::Value, String> {
+/// Maps the renderer's `{achievements, stats}` maps into the ordered
+/// `AchChange`/`StatChange` lists the worker's `WritePayload` expects, and
+/// serializes them to the JSON string sent over its stdin. Pure and sync so it's
+/// unit-testable without spawning a worker process.
+fn write_payload(changes: GameChanges) -> String {
     let ach: Vec<AchChange> = changes
         .achievements
         .into_iter()
@@ -164,8 +167,13 @@ async fn save_changes(app_id: String, changes: GameChanges) -> Result<serde_json
         .into_iter()
         .map(|(id, value)| StatChange { id, value })
         .collect();
+    serde_json::json!({ "achievements": ach, "stats": stats }).to_string()
+}
+
+#[tauri::command]
+async fn save_changes(app_id: String, changes: GameChanges) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
-        let payload = serde_json::json!({ "achievements": ach, "stats": stats }).to_string();
+        let payload = write_payload(changes);
         let json = run_self_worker(&["write", app_id.as_str()], Some(payload.as_str()))?;
         serde_json::from_str(&json).map_err(|e| format!("解析失敗：{e}"))
     })
@@ -296,6 +304,14 @@ async fn open_releases() -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Whether `dir` is an NSIS install (the installer leaves `uninstall.exe` beside the
+/// app) rather than a portable copy. Also built under `cfg(test)` so every platform
+/// runs its tests; the Windows-only use alone would leave it dead code on macOS.
+#[cfg(any(windows, test))]
+fn has_nsis_uninstaller(dir: &std::path::Path) -> bool {
+    dir.join("uninstall.exe").is_file()
+}
+
 /// Whether this install can update itself in place through the updater plugin: an
 /// NSIS install on Windows (the installer leaves `uninstall.exe` beside the app; a
 /// portable copy has none) or the `.app` bundle on macOS. A portable .exe gets the
@@ -306,7 +322,7 @@ fn updater_supported() -> bool {
     {
         std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join("uninstall.exe").is_file()))
+            .and_then(|exe| exe.parent().map(has_nsis_uninstaller))
             .unwrap_or(false)
     }
     #[cfg(target_os = "macos")]
@@ -413,7 +429,8 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::run_worker;
+    use super::{has_nsis_uninstaller, run_worker, write_payload, GameChanges, WritePayload};
+    use std::collections::HashMap;
 
     #[test]
     fn worker_rejects_missing_or_invalid_app_id_without_connecting_to_steam() {
@@ -430,5 +447,119 @@ mod tests {
             run_worker(&["invalid-smoke-mode".into(), "1".into()]).unwrap_err(),
             "worker：未知模式 invalid-smoke-mode"
         );
+    }
+
+    #[test]
+    fn game_changes_deserializes_from_the_frontend_json_shape() {
+        // Exact shape tauriSource.ts's saveChanges sends: GameChanges { achievements:
+        // Record<string, boolean>, stats: Record<string, number> }.
+        let json = r#"{"achievements":{"ACH_A":true,"ACH_B":false},"stats":{"score":12.5}}"#;
+        let changes: GameChanges = serde_json::from_str(json).expect("valid shape");
+        assert_eq!(changes.achievements.get("ACH_A"), Some(&true));
+        assert_eq!(changes.achievements.get("ACH_B"), Some(&false));
+        assert_eq!(changes.stats.get("score"), Some(&12.5));
+    }
+
+    #[test]
+    fn game_changes_defaults_missing_achievements_or_stats_to_empty() {
+        let neither: GameChanges = serde_json::from_str("{}").expect("both default");
+        assert!(neither.achievements.is_empty());
+        assert!(neither.stats.is_empty());
+
+        let only_achievements: GameChanges =
+            serde_json::from_str(r#"{"achievements":{"A":true}}"#).expect("stats default");
+        assert_eq!(only_achievements.achievements.len(), 1);
+        assert!(only_achievements.stats.is_empty());
+
+        let only_stats: GameChanges =
+            serde_json::from_str(r#"{"stats":{"score":1.0}}"#).expect("achievements default");
+        assert!(only_stats.achievements.is_empty());
+        assert_eq!(only_stats.stats.len(), 1);
+    }
+
+    #[test]
+    fn write_payload_round_trips_every_achievement_and_stat() {
+        let mut achievements = HashMap::new();
+        achievements.insert("ACH_A".to_string(), true);
+        achievements.insert("ACH_B".to_string(), false);
+        let mut stats = HashMap::new();
+        stats.insert("score".to_string(), 12.5);
+        stats.insert("kills".to_string(), 7.0);
+        let changes = GameChanges {
+            achievements,
+            stats,
+        };
+
+        let payload = write_payload(changes);
+        let parsed: WritePayload = serde_json::from_str(&payload).expect("valid WritePayload");
+
+        // HashMap iteration order is random, so compare as sorted sets.
+        let mut ach: Vec<(String, bool)> = parsed
+            .achievements
+            .into_iter()
+            .map(|a| (a.id, a.unlock))
+            .collect();
+        ach.sort();
+        assert_eq!(
+            ach,
+            vec![("ACH_A".to_string(), true), ("ACH_B".to_string(), false)]
+        );
+
+        let mut stats_out: Vec<(String, f64)> =
+            parsed.stats.into_iter().map(|s| (s.id, s.value)).collect();
+        stats_out.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            stats_out,
+            vec![("kills".to_string(), 7.0), ("score".to_string(), 12.5)]
+        );
+    }
+
+    #[test]
+    fn write_payload_of_empty_changes_produces_empty_vectors() {
+        let changes = GameChanges {
+            achievements: HashMap::new(),
+            stats: HashMap::new(),
+        };
+        let payload = write_payload(changes);
+        let parsed: WritePayload = serde_json::from_str(&payload).expect("valid WritePayload");
+        assert!(parsed.achievements.is_empty());
+        assert!(parsed.stats.is_empty());
+    }
+
+    /// A unique throwaway directory under the OS temp dir, cleaned up by the caller.
+    fn temp_subdir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "sam-updater-test-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    #[test]
+    fn has_nsis_uninstaller_true_when_uninstall_exe_file_exists() {
+        let dir = temp_subdir("file");
+        std::fs::write(dir.join("uninstall.exe"), b"stub").expect("write fixture");
+        assert!(has_nsis_uninstaller(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn has_nsis_uninstaller_false_when_absent() {
+        let dir = temp_subdir("absent");
+        assert!(!has_nsis_uninstaller(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn has_nsis_uninstaller_false_when_uninstall_exe_is_a_directory() {
+        let dir = temp_subdir("dir");
+        std::fs::create_dir_all(dir.join("uninstall.exe")).expect("mkdir");
+        assert!(!has_nsis_uninstaller(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -877,9 +877,9 @@ mod tests {
     use super::test_support::{kv_bytes, kv_float, kv_int, kv_obj, kv_str, schema_bytes};
     use super::{
         achievement_write_allowed, choose_account_id, completed_call_handle,
-        parse_app_list_with_limit, scan_threads, schema_ach_perms, schema_stat_defs,
-        stat_i32_value, stat_min_default, stat_value_is_valid, writable_stat_def, Kv, KvValue,
-        StatChange, StatDef, API_CALL_COMPLETED,
+        parse_app_list_with_limit, parse_most_recent_account_id, scan_threads, schema_ach_perms,
+        schema_stat_defs, stat_i32_value, stat_min_default, stat_value_is_valid, writable_stat_def,
+        Kv, KvValue, StatChange, StatDef, API_CALL_COMPLETED,
     };
     use std::collections::HashMap;
 
@@ -1128,6 +1128,117 @@ mod tests {
         let accounts = [101, 202, 303];
         let chosen = choose_account_id(accounts, |_| false);
         assert_eq!(chosen, Some(101));
+    }
+
+    /// A SteamID64 for the given account id, using the real "individual" universe
+    /// bits (e.g. account id 111 → 76561197960265839).
+    fn steamid64(account_id: u32) -> u64 {
+        0x0110_0001_0000_0000u64 + account_id as u64
+    }
+
+    /// One `loginusers.vdf` account entry, `key`/`value` standing in for the
+    /// `MostRecent` line under test (case and value vary per test).
+    fn login_block(account_id: u32, key: &str, value: &str) -> String {
+        let sid = steamid64(account_id);
+        format!(
+            "\t\"{sid}\"\n\t{{\n\t\t\"AccountName\"\t\t\"user{account_id}\"\n\t\t\"{key}\"\t\t\"{value}\"\n\t\t\"Timestamp\"\t\t\"1700000000\"\n\t}}\n"
+        )
+    }
+
+    fn loginusers_vdf(blocks: &[String]) -> String {
+        format!("\"users\"\n{{\n{}\n}}\n", blocks.join(""))
+    }
+
+    #[test]
+    fn parse_most_recent_account_id_picks_the_flagged_account_among_several() {
+        let vdf = loginusers_vdf(&[
+            login_block(111, "MostRecent", "0"),
+            login_block(222, "MostRecent", "1"),
+            login_block(333, "MostRecent", "0"),
+        ]);
+        assert_eq!(
+            parse_most_recent_account_id(&vdf, &[111, 222, 333]),
+            Some(222)
+        );
+    }
+
+    #[test]
+    fn parse_most_recent_account_id_handles_a_single_account_flagged_or_not() {
+        let flagged = loginusers_vdf(&[login_block(111, "MostRecent", "1")]);
+        assert_eq!(parse_most_recent_account_id(&flagged, &[111]), Some(111));
+
+        let unflagged = loginusers_vdf(&[login_block(111, "MostRecent", "0")]);
+        assert_eq!(parse_most_recent_account_id(&unflagged, &[111]), None);
+    }
+
+    #[test]
+    fn parse_most_recent_account_id_is_case_insensitive_on_the_key() {
+        let lower = loginusers_vdf(&[login_block(111, "mostrecent", "1")]);
+        assert_eq!(parse_most_recent_account_id(&lower, &[111]), Some(111));
+
+        let upper = loginusers_vdf(&[login_block(111, "MOSTRECENT", "1")]);
+        assert_eq!(parse_most_recent_account_id(&upper, &[111]), Some(111));
+    }
+
+    #[test]
+    fn parse_most_recent_account_id_ignores_a_flagged_account_outside_the_known_list() {
+        // 999 is flagged MostRecent "1" in the file but has no local userdata folder
+        // (not in `accounts`); 111 is known locally but not flagged. Neither should win.
+        let vdf = loginusers_vdf(&[
+            login_block(999, "MostRecent", "1"),
+            login_block(111, "MostRecent", "0"),
+        ]);
+        assert_eq!(parse_most_recent_account_id(&vdf, &[111]), None);
+    }
+
+    #[test]
+    fn parse_most_recent_account_id_ignores_most_recent_key_nested_below_top_level() {
+        // A MostRecent key one level deeper than the account's own top-level keys
+        // must not be mistaken for that account's flag (depth-tracking check).
+        let sid = steamid64(111);
+        let vdf = format!(
+            "\"users\"\n{{\n\t\"{sid}\"\n\t{{\n\t\t\"nested\"\n\t\t{{\n\t\t\t\"MostRecent\"\t\t\"1\"\n\t\t}}\n\t}}\n}}\n"
+        );
+        assert_eq!(parse_most_recent_account_id(&vdf, &[111]), None);
+    }
+
+    #[test]
+    fn parse_most_recent_account_id_converts_steamid64_to_the_low_32_bit_account_id() {
+        let account_id = 4_000_000_123u32; // large enough to expose a truncation bug
+        let vdf = loginusers_vdf(&[login_block(account_id, "MostRecent", "1")]);
+        assert_eq!(
+            parse_most_recent_account_id(&vdf, &[account_id]),
+            Some(account_id)
+        );
+    }
+
+    #[test]
+    fn parse_most_recent_account_id_returns_none_for_empty_or_malformed_vdf() {
+        assert_eq!(parse_most_recent_account_id("", &[111]), None);
+        // No quotes/braces at all → the tokenizer yields no tokens.
+        assert_eq!(
+            parse_most_recent_account_id("111 MostRecent 1", &[111]),
+            None
+        );
+        // Quoted tokens present but no account/brace structure around them.
+        assert_eq!(
+            parse_most_recent_account_id("\"MostRecent\" \"1\"", &[111]),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_most_recent_account_id_does_not_panic_on_truncated_vdf() {
+        let full = loginusers_vdf(&[login_block(111, "MostRecent", "1")]);
+        // Cut off right after the MostRecent key, before its value token.
+        let cut_at = full.find("\"MostRecent\"").expect("key present") + "\"MostRecent\"".len();
+        assert_eq!(parse_most_recent_account_id(&full[..cut_at], &[111]), None);
+        // Cut off mid account-id token.
+        assert_eq!(parse_most_recent_account_id(&full[..10], &[111]), None);
+        // Cut off right before the file's closing brace.
+        let cut_before_end = full.trim_end().len() - 1;
+        let result = parse_most_recent_account_id(&full[..cut_before_end], &[111]);
+        assert_eq!(result, Some(111));
     }
 
     #[test]
