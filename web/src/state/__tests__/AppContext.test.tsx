@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GameChanges, SamSource, SaveResult } from '../../data/source'
 import type { Achievement, Game, GameCompletion, GameSummary } from '../../types'
+import type { DownloadEvent } from '../../lib/updater'
 
 /** The source the provider picks up, swapped per test through the mocked data seam. */
 const seam = vi.hoisted(() => ({ source: null as unknown }))
@@ -12,6 +13,16 @@ vi.mock('../../data', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../data')>()
   return { ...original, isTauri: () => false, getSource: () => seam.source as SamSource }
 })
+
+/** The in-app updater is Tauri-only (plugin-updater/plugin-process); mock the whole
+ *  seam so installUpdate's own logic can be driven without a real Tauri runtime. */
+const updateApi = vi.hoisted(() => ({
+  fetchLatestVersion: vi.fn(async (): Promise<string> => '0.0.0'),
+  installLatestUpdate: vi.fn(async (_onEvent: (event: DownloadEvent) => void): Promise<boolean> => true),
+  openReleasesPage: vi.fn(async (): Promise<void> => {}),
+  updaterSupported: vi.fn(async (): Promise<boolean> => false),
+}))
+vi.mock('../../data/update', () => updateApi)
 
 import { AppProvider, useApp } from '../AppContext'
 
@@ -186,5 +197,86 @@ describe('AppProvider', () => {
     expect(src.loadGameCalls).toEqual(['10', '10'])
     expect(result.current.state.achState['10']).toEqual({ a1: false, a2: true })
     expect(result.current.state.origAch['10']).toEqual({ a1: false, a2: false })
+  })
+
+  describe('installUpdate', () => {
+    beforeEach(() => {
+      updateApi.fetchLatestVersion.mockReset().mockResolvedValue('0.0.0')
+      updateApi.installLatestUpdate.mockReset().mockResolvedValue(true)
+      updateApi.openReleasesPage.mockReset().mockResolvedValue(undefined)
+      updateApi.updaterSupported.mockReset().mockResolvedValue(false)
+    })
+
+    it('applies download progress events onto updateInstall as they arrive', () => {
+      updateApi.installLatestUpdate.mockImplementation(async (onEvent) => {
+        onEvent({ event: 'Started', data: { contentLength: 1000 } })
+        onEvent({ event: 'Progress', data: { chunkLength: 400 } })
+        return true
+      })
+      const { result } = setup(new FakeSource([], {}))
+
+      act(() => result.current.installUpdate())
+
+      expect(result.current.state.updateInstall).toEqual({ phase: 'downloading', received: 400, total: 1000 })
+      expect(updateApi.installLatestUpdate).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports a phase of installing once the download finishes, then leaves state alone on a successful relaunch', async () => {
+      updateApi.installLatestUpdate.mockImplementation(async (onEvent) => {
+        onEvent({ event: 'Started', data: {} })
+        onEvent({ event: 'Finished' })
+        return true
+      })
+      const { result } = setup(new FakeSource([], {}))
+
+      act(() => result.current.installUpdate())
+      expect(result.current.state.updateInstall.phase).toBe('installing')
+      await settle()
+      // A successful install ends in a relaunch (handled inside the mocked module) — the
+      // resolved `true` leaves updateInstall as the caller last reported it, no error.
+      expect(result.current.state.updateInstall.phase).toBe('installing')
+    })
+
+    it('marks the install failed with the no-package message when nothing is available for this platform', async () => {
+      updateApi.installLatestUpdate.mockResolvedValue(false)
+      const { result } = setup(new FakeSource([], {}))
+
+      act(() => result.current.installUpdate())
+      await waitFor(() => expect(result.current.state.updateInstall.phase).toBe('error'))
+
+      expect(result.current.state.updateInstall).toEqual({
+        phase: 'error', received: 0, total: null, error: 'No update package for this platform',
+      })
+    })
+
+    it('marks the install failed with the error message when the download/install rejects', async () => {
+      updateApi.installLatestUpdate.mockRejectedValue(new Error('network down'))
+      const { result } = setup(new FakeSource([], {}))
+
+      act(() => result.current.installUpdate())
+      await waitFor(() => expect(result.current.state.updateInstall.phase).toBe('error'))
+
+      expect(result.current.state.updateInstall).toEqual({
+        phase: 'error', received: 0, total: null, error: 'network down',
+      })
+    })
+
+    it('is a no-op while an install is already in flight', async () => {
+      let resolveInstall: (v: boolean) => void = () => {}
+      updateApi.installLatestUpdate.mockImplementation(
+        () => new Promise((resolve) => { resolveInstall = resolve }),
+      )
+      const { result } = setup(new FakeSource([], {}))
+
+      act(() => result.current.installUpdate())
+      expect(result.current.state.updateInstall.phase).toBe('downloading')
+      act(() => result.current.installUpdate())
+      expect(updateApi.installLatestUpdate).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        resolveInstall(true)
+        await Promise.resolve()
+      })
+    })
   })
 })
