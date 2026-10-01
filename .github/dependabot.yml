@@ -2,12 +2,18 @@ version: 2
 
 # Legacy WinForms projects (SAM.API/, SAM.Game/, SAM.Picker/) are intentionally
 # not covered — see CLAUDE.md, legacy design concerns are out of scope.
+#
+# Every entry has a 7-day cooldown: a version update is only proposed once the
+# release is a week old, so a hijacked release has time to be caught and yanked
+# upstream first. Security updates are not delayed by it.
 updates:
   # React + Vite frontend
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       # vitest and @vitest/* pin each other as exact-version peers, so a major
@@ -37,6 +43,8 @@ updates:
     directory: /web/src-tauri
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
 
   # Steam client FFI crate
@@ -44,6 +52,8 @@ updates:
     directory: /web/steam-core
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
 
   # Release workflow actions
@@ -51,3 +61,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7

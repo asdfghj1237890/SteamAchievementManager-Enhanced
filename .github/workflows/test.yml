@@ -24,6 +24,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -50,6 +52,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -95,6 +99,8 @@ jobs:
         os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -120,19 +126,19 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
       - name: Test steam-core
         working-directory: web/steam-core
-        run: cargo test --all-targets --all-features
+        run: cargo test --locked --all-targets --all-features
       - name: Lint steam-core
         working-directory: web/steam-core
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test Tauri shell
         working-directory: web/src-tauri
-        run: cargo test --workspace --all-targets --all-features
+        run: cargo test --locked --workspace --all-targets --all-features
       - name: Lint Tauri shell
         working-directory: web/src-tauri
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Build the native debug executable
         working-directory: web
-        run: npm run tauri -- build --debug --no-bundle --ci
+        run: npm run tauri -- build --debug --no-bundle --ci -- --locked
       - name: Smoke-test native worker dispatch
         working-directory: web
         run: npm run smoke:native
@@ -143,6 +149,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.96.0
@@ -158,13 +166,13 @@ jobs:
       - name: Verify GTK advisory exceptions stay outside supported targets
         shell: bash
         run: |
-          cargo tree --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --depth 0
-          cargo tree --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin --depth 0
-          if cargo tree --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
+          cargo tree --locked --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --depth 0
+          cargo tree --locked --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin --depth 0
+          if cargo tree --locked --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
             echo "GTK3 advisory exception became reachable on Windows" >&2
             exit 1
           fi
-          if cargo tree --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
+          if cargo tree --locked --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
             echo "GTK3 advisory exception became reachable on macOS" >&2
             exit 1
           fi

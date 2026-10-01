@@ -81,7 +81,7 @@ npm run test:a11y      # quick Chromium axe checks
 npm exec -- playwright install chromium firefox webkit
 
 # Native smoke (safe: invalid worker mode, no Steam read/write)
-npm run tauri -- build --debug --no-bundle --ci
+npm run tauri -- build --debug --no-bundle --ci -- --locked
 npm run smoke:native
 ```
 
