@@ -5,7 +5,7 @@
 use super::{
     achievement_write_allowed, choose_account_id_with_preferred, parse_most_recent_account_id,
     stat_i32_value, stat_value_is_valid, writable_stat_def, AchChange, AchievementInfo,
-    GameProgress, GameStats, OwnedGame, StatChange, StatInfo, WriteResult,
+    GameProgress, GameStats, OwnedGame, StatChange, StatInfo, WriteResult, WriteTally,
 };
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::time::{Duration, Instant};
@@ -756,8 +756,9 @@ impl SteamClient {
 
             // One schema read + parse for both the permission gate and the stat defs.
             let schema = self.read_schema(app_id);
-            let mut applied = 0u32;
-            let mut rejected: Vec<String> = Vec::new();
+            // Every change ends up counted as applied or listed as rejected; none
+            // is skipped silently (the UI would show a skipped edit as saved).
+            let mut tally = WriteTally::default();
             if !ach_changes.is_empty() {
                 // Fail closed: never modify schema-protected achievements, even if a
                 // stale or crafted renderer payload asks us to (these are irreversible
@@ -772,21 +773,22 @@ impl SteamClient {
                             // Same `& 3` mask as the read path, but fail closed for
                             // unknown ids instead of assuming permission 0.
                             if !achievement_write_allowed(&ach_perms, &ch.id) {
-                                rejected.push(ch.id.clone());
+                                tally.reject(&ch.id);
                                 continue;
                             }
                             let idc = match CString::new(ch.id.clone()) {
                                 Ok(c) => c,
-                                Err(_) => continue,
+                                Err(_) => {
+                                    tally.reject(&ch.id);
+                                    continue;
+                                }
                             };
                             let ok = if ch.unlock {
                                 set_ach(stats, idc.as_ptr())
                             } else {
                                 clear_ach(stats, idc.as_ptr())
                             };
-                            if ok != 0 {
-                                applied += 1;
-                            }
+                            tally.record(&ch.id, ok);
                         }
                     }
                     None => {
@@ -806,51 +808,57 @@ impl SteamClient {
                     vfn(stats, 0);
                 for sc in stat_changes {
                     let Some(def) = writable_stat_def(&defs, sc) else {
-                        rejected.push(sc.id.clone());
+                        tally.reject(&sc.id);
                         continue;
                     };
                     let idc = match CString::new(sc.id.clone()) {
                         Ok(c) => c,
-                        Err(_) => continue,
+                        Err(_) => {
+                            tally.reject(&sc.id);
+                            continue;
+                        }
                     };
+                    // Without the current value the schema limits (increment-only,
+                    // max change) can't be checked, so a failed read is a rejection.
                     let current = if def.is_float {
                         let mut v: f32 = 0.0;
                         if get_float(stats, idc.as_ptr(), &mut v) == 0 {
+                            tally.reject(&sc.id);
                             continue;
                         }
                         v as f64
                     } else {
                         let mut v: i32 = 0;
                         if get_int(stats, idc.as_ptr(), &mut v) == 0 {
+                            tally.reject(&sc.id);
                             continue;
                         }
                         v as f64
                     };
                     if !stat_value_is_valid(def, sc, current) {
-                        rejected.push(sc.id.clone());
+                        tally.reject(&sc.id);
                         continue;
                     }
                     let ok = if def.is_float {
                         set_float(stats, idc.as_ptr(), sc.value as f32)
                     } else {
                         let Some(value) = stat_i32_value(sc) else {
+                            tally.reject(&sc.id);
                             continue;
                         };
                         set_int(stats, idc.as_ptr(), value)
                     };
-                    if ok != 0 {
-                        applied += 1;
-                    }
+                    tally.record(&sc.id, ok);
                 }
             }
 
+            // A failed StoreStats does not prove nothing was written: the Set*
+            // calls above already changed Steam's in-memory stats, and Steam stores
+            // pending stats itself when this process exits.
             if store(stats) == 0 {
-                return Err("StoreStats 失敗（變更未寫入）".into());
+                return Err("StoreStats 失敗（無法確認變更是否已寫入）".into());
             }
-            Ok(WriteResult {
-                saved: applied,
-                rejected,
-            })
+            Ok(tally.into_result())
         }
     }
 }

@@ -4,7 +4,7 @@ import { HashRouter } from 'react-router'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GameChanges, SamSource, SaveResult } from '../../data/source'
-import type { Achievement, Game, GameCompletion, GameSummary } from '../../types'
+import type { Achievement, Game, GameCompletion, GameSummary, Stat } from '../../types'
 import type { DownloadEvent } from '../../lib/updater'
 
 /** The source the provider picks up, swapped per test through the mocked data seam. */
@@ -33,13 +33,23 @@ class FakeSource implements SamSource {
   saveCalls: [string, GameChanges][] = []
   progressCalls: string[][] = []
   saveResult: SaveResult = { saved: 1, rejected: [] }
+  /** When set, a saveChanges call made while it is set rejects with it. */
+  saveError: Error | null = null
+  /** When set, loadGame rejects with it. */
+  loadGameError: Error | null = null
+  /** When true, loadGame stays pending until releaseLoad() is called. */
+  holdLoad = false
+  releaseLoad: (() => void) | null = null
   /** When true, saveChanges stays pending until releaseSave() is called. */
   holdSave = false
   releaseSave: (() => void) | null = null
+  /** Every held save, oldest first (releaseSave is the newest). */
+  heldSaves: (() => void)[] = []
 
   constructor(
     public games: GameSummary[],
-    private readonly details: Record<string, Game>,
+    /** What Steam "has": tests replace an entry to change the next loadGame result. */
+    readonly details: Record<string, Game>,
     private readonly progress: Record<string, GameCompletion> = {},
   ) {}
 
@@ -50,6 +60,8 @@ class FakeSource implements SamSource {
 
   async loadGame(appId: string): Promise<Game> {
     this.loadGameCalls.push(appId)
+    if (this.holdLoad) await new Promise<void>((resolve) => { this.releaseLoad = resolve })
+    if (this.loadGameError) throw this.loadGameError
     const game = this.details[appId]
     if (!game) throw new Error(`no detail for ${appId}`)
     return structuredClone(game)
@@ -57,10 +69,13 @@ class FakeSource implements SamSource {
 
   saveChanges(appId: string, changes: GameChanges): Promise<SaveResult> {
     this.saveCalls.push([appId, structuredClone(changes)])
-    return new Promise((resolve) => {
-      const finish = () => resolve(this.saveResult)
-      if (this.holdSave) this.releaseSave = finish
-      else finish()
+    const error = this.saveError
+    return new Promise((resolve, reject) => {
+      const finish = () => (error ? reject(error) : resolve(this.saveResult))
+      if (this.holdSave) {
+        this.releaseSave = finish
+        this.heldSaves.push(finish)
+      } else finish()
     })
   }
 
@@ -78,9 +93,10 @@ const summary = (appId: string): GameSummary => ({
 const ach = (id: string, unlocked: boolean): Achievement => ({
   id, name: id, desc: '', rarity: 0, unlocked, hidden: false, protected: false, points: 0,
 })
-const game = (appId: string, achievements: Achievement[]): Game => ({
+const stat = (id: string, value: number): Stat => ({ id, name: id, value, extra: '', protected: false })
+const game = (appId: string, achievements: Achievement[], stats: Stat[] = []): Game => ({
   id: appId, appId, name: `Game ${appId}`, genre: '', type: 'normal', hue: 0,
-  y: 2024, m: 1, last: '', achievements, stats: [],
+  y: 2024, m: 1, last: '', achievements, stats,
 })
 const done = (earned: number, total: number): GameCompletion => ({
   earned, total, pct: Math.round((earned / total) * 100),
@@ -98,6 +114,8 @@ function setup(source: FakeSource) {
 
 /** Let pending promises and their dispatches settle. */
 const settle = () => act(async () => { await Promise.resolve() })
+/** A whole macrotask: every promise chain already under way has run to its end. */
+const macrotask = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
 describe('AppProvider', () => {
   beforeEach(() => {
@@ -197,6 +215,241 @@ describe('AppProvider', () => {
     expect(src.loadGameCalls).toEqual(['10', '10'])
     expect(result.current.state.achState['10']).toEqual({ a1: false, a2: true })
     expect(result.current.state.origAch['10']).toEqual({ a1: false, a2: false })
+  })
+
+  // A save that throws (or times out) may still have written something, so the
+  // provider re-reads the game instead of assuming Steam is unchanged.
+  describe('a failed save', () => {
+    it('re-reads the game and rebases the baseline, keeping unwritten edits pending', async () => {
+      const src = new FakeSource([summary('10')], {
+        '10': game(
+          '10',
+          [ach('a1', false), ach('a2', false), ach('a3', false)],
+          [stat('kills', 5), stat('deaths', 1)],
+        ),
+      })
+      const { result } = setup(src)
+      act(() => result.current.openGame('10'))
+      await waitFor(() => expect(result.current.state.loaded['10']).toBeDefined())
+
+      act(() => result.current.toggleAch('10', 'a1', false))
+      act(() => result.current.toggleAch('10', 'a2', false))
+      act(() => result.current.setStat('10', 'kills', '9'))
+      // Steam took a1 before the write died; a2 and kills never landed. a3 and deaths
+      // changed outside the app in the meantime.
+      src.saveError = new Error('worker timed out')
+      src.details['10'] = game(
+        '10',
+        [ach('a1', true), ach('a2', false), ach('a3', true)],
+        [stat('kills', 5), stat('deaths', 2)],
+      )
+      await act(async () => {
+        await result.current.store()
+      })
+
+      expect(src.saveCalls).toEqual([['10', { achievements: { a1: true, a2: true }, stats: { kills: 9 } }]])
+      expect(src.loadGameCalls).toEqual(['10', '10'])
+      expect(result.current.state.toast).toBe('Write failed: worker timed out')
+      expect(result.current.state.saving).toBe(false)
+      // The baseline is what Steam actually has now.
+      expect(result.current.state.origAch['10']).toEqual({ a1: true, a2: false, a3: true })
+      expect(result.current.state.origStat['10']).toEqual({ kills: 5, deaths: 2 })
+      // a1 was written (no longer pending); a2 and kills are still pending edits, and
+      // the untouched a3/deaths follow Steam instead of becoming phantom edits.
+      expect(result.current.state.achState['10']).toEqual({ a1: true, a2: true, a3: true })
+      expect(result.current.state.statState['10']).toEqual({ kills: 9, deaths: 2 })
+      expect(result.current.state.games[0].completion).toEqual(done(2, 3))
+    })
+
+    it('keeps edits made while the failing save was in flight', async () => {
+      const src = new FakeSource([summary('10')], {
+        '10': game('10', [ach('a1', false), ach('a2', false), ach('a3', false)]),
+      })
+      src.saveError = new Error('boom')
+      src.holdSave = true
+      const { result } = setup(src)
+      act(() => result.current.openGame('10'))
+      await waitFor(() => expect(result.current.state.loaded['10']).toBeDefined())
+
+      act(() => result.current.toggleAch('10', 'a1', false))
+      act(() => {
+        void result.current.store()
+      })
+      await waitFor(() => expect(src.saveCalls).toHaveLength(1))
+
+      // While the write is in flight the user undoes a1 and turns a2 on; Steam had
+      // already applied the a1 unlock before the save failed.
+      act(() => result.current.toggleAch('10', 'a1', false))
+      act(() => result.current.toggleAch('10', 'a2', false))
+      src.details['10'] = game('10', [ach('a1', true), ach('a2', false), ach('a3', false)])
+      await act(async () => {
+        src.releaseSave?.()
+      })
+      await waitFor(() =>
+        expect(result.current.state.origAch['10']).toEqual({ a1: true, a2: false, a3: false }),
+      )
+
+      expect(src.loadGameCalls).toEqual(['10', '10'])
+      expect(result.current.state.saving).toBe(false)
+      // Both in-flight edits survive and read as pending against the new baseline.
+      expect(result.current.state.achState['10']).toEqual({ a1: false, a2: true, a3: false })
+    })
+
+    it('keeps Save held until the re-read has rebased the baseline', async () => {
+      const src = new FakeSource([summary('10')], { '10': game('10', [ach('a1', false), ach('a2', false)]) })
+      const { result } = setup(src)
+      act(() => result.current.openGame('10'))
+      await waitFor(() => expect(result.current.state.loaded['10']).toBeDefined())
+
+      act(() => result.current.toggleAch('10', 'a1', false))
+      src.saveError = new Error('worker timed out')
+      src.holdLoad = true
+      act(() => {
+        void result.current.store()
+      })
+      await waitFor(() => expect(src.loadGameCalls).toEqual(['10', '10']))
+      await waitFor(() => expect(result.current.state.toast).toBe('Write failed: worker timed out'))
+
+      // The failure is reported, but the baseline is still the pre-save one: a retry
+      // now would diff against it, so Save stays held while the re-read is out.
+      await act(async () => {
+        await macrotask()
+      })
+      expect(result.current.state.saving).toBe(true)
+      expect(result.current.state.origAch['10']).toEqual({ a1: false, a2: false })
+
+      // Steam had taken a1 before the write died.
+      src.details['10'] = game('10', [ach('a1', true), ach('a2', false)])
+      await act(async () => {
+        src.releaseLoad?.()
+      })
+      await waitFor(() => expect(result.current.state.saving).toBe(false))
+      expect(result.current.state.origAch['10']).toEqual({ a1: true, a2: false })
+    })
+
+    it('keeps the current state, without throwing, when the re-read fails too', async () => {
+      const src = new FakeSource([summary('10')], { '10': game('10', [ach('a1', false), ach('a2', false)]) })
+      const { result } = setup(src)
+      act(() => result.current.openGame('10'))
+      await waitFor(() => expect(result.current.state.loaded['10']).toBeDefined())
+      const loadedBefore = result.current.state.loaded['10']
+
+      act(() => result.current.toggleAch('10', 'a1', false))
+      src.saveError = new Error('boom')
+      src.loadGameError = new Error('Steam is not running')
+      await act(async () => {
+        await expect(result.current.store()).resolves.toBeUndefined()
+      })
+
+      expect(src.loadGameCalls).toEqual(['10', '10'])
+      expect(result.current.state.toast).toBe('Write failed: boom')
+      expect(result.current.state.saving).toBe(false)
+      expect(result.current.state.detailStatus).toBe('ready')
+      expect(result.current.state.loaded['10']).toBe(loadedBefore)
+      // The edit is still there and still pending.
+      expect(result.current.state.achState['10']).toEqual({ a1: true, a2: false })
+      expect(result.current.state.origAch['10']).toEqual({ a1: false, a2: false })
+    })
+
+    it('rebases only the saved game when the user has switched to another one', async () => {
+      const src = new FakeSource([summary('10'), summary('20')], {
+        '10': game('10', [ach('a1', false), ach('a2', false)]),
+        '20': game('20', [ach('b1', true)]),
+      })
+      src.saveError = new Error('boom')
+      src.holdSave = true
+      const { result } = setup(src)
+      act(() => result.current.openGame('10'))
+      await waitFor(() => expect(result.current.state.loaded['10']).toBeDefined())
+
+      act(() => result.current.toggleAch('10', 'a1', false))
+      act(() => {
+        void result.current.store()
+      })
+      await waitFor(() => expect(src.saveCalls).toHaveLength(1))
+      act(() => result.current.openGame('20'))
+      await waitFor(() => expect(result.current.state.loaded['20']).toBeDefined())
+
+      src.details['10'] = game('10', [ach('a1', true), ach('a2', false)])
+      await act(async () => {
+        src.releaseSave?.()
+      })
+      await waitFor(() => expect(result.current.state.origAch['10']).toEqual({ a1: true, a2: false }))
+
+      expect(src.loadGameCalls).toEqual(['10', '20', '10'])
+      expect(result.current.state.saving).toBe(false)
+      expect(result.current.state.achState['10']).toEqual({ a1: true, a2: false })
+      // The game now on screen is untouched.
+      expect(result.current.state.activeAppId).toBe('20')
+      expect(result.current.state.detailStatus).toBe('ready')
+      expect(result.current.state.achState['20']).toEqual({ b1: true })
+      expect(result.current.state.origAch['20']).toEqual({ b1: true })
+    })
+
+    it('does not bring back a game that left the detail cache during the re-read', async () => {
+      const src = new FakeSource([summary('10')], { '10': game('10', [ach('a1', false)]) })
+      src.saveError = new Error('boom')
+      src.holdSave = true
+      const { result } = setup(src)
+      act(() => result.current.openGame('10'))
+      await waitFor(() => expect(result.current.state.loaded['10']).toBeDefined())
+
+      act(() => result.current.toggleAch('10', 'a1', false))
+      act(() => {
+        void result.current.store()
+      })
+      await waitFor(() => expect(src.saveCalls).toHaveLength(1))
+      // Stand-in for a detail-cache eviction while the save is in flight.
+      act(() => result.current.set({ loaded: {}, achState: {}, statState: {}, origAch: {}, origStat: {} }))
+      await act(async () => {
+        src.releaseSave?.()
+        await macrotask()
+      })
+
+      expect(src.loadGameCalls).toEqual(['10', '10'])
+      expect(result.current.state.saving).toBe(false)
+      expect(result.current.state.loaded['10']).toBeUndefined()
+      expect(result.current.state.origAch['10']).toBeUndefined()
+    })
+
+    it('skips the re-read once a newer save has started', async () => {
+      const src = new FakeSource([summary('10')], { '10': game('10', [ach('a1', false), ach('a2', false)]) })
+      src.holdSave = true
+      const { result } = setup(src)
+      act(() => result.current.openGame('10'))
+      await waitFor(() => expect(result.current.state.loaded['10']).toBeDefined())
+
+      // First save will fail; a second one starts before the first settles.
+      src.saveError = new Error('boom')
+      act(() => result.current.toggleAch('10', 'a1', false))
+      act(() => {
+        void result.current.store()
+      })
+      await waitFor(() => expect(src.saveCalls).toHaveLength(1))
+      src.saveError = null
+      src.saveResult = { saved: 2, rejected: [] }
+      act(() => result.current.toggleAch('10', 'a2', false))
+      act(() => {
+        void result.current.store()
+      })
+      await waitFor(() => expect(src.saveCalls).toHaveLength(2))
+
+      await act(async () => {
+        src.heldSaves[0]()
+      })
+      await waitFor(() => expect(result.current.state.toast).toBe('Write failed: boom'))
+      await settle()
+      // No stale re-read: the newer save owns the outcome.
+      expect(src.loadGameCalls).toEqual(['10'])
+      expect(result.current.state.origAch['10']).toEqual({ a1: false, a2: false })
+
+      await act(async () => {
+        src.heldSaves[1]()
+      })
+      await waitFor(() => expect(result.current.state.origAch['10']).toEqual({ a1: true, a2: true }))
+      expect(src.loadGameCalls).toEqual(['10'])
+      expect(result.current.state.toast).toBe('Wrote 2 changes to Steam')
+    })
   })
 
   describe('installUpdate', () => {

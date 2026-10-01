@@ -9,11 +9,11 @@ export interface GameChanges {
 export interface SaveResult {
   saved: number
   /**
-   * Ids Steam refused (a schema-protected/unknown achievement, a protected/unknown
-   * stat, or a stat value that failed validation). Empty when everything requested
-   * was applied. The UI keys off this rather than comparing `saved` to the number of
-   * changes sent, because a no-op re-write (e.g. re-locking an already-locked
-   * achievement) also isn't counted in `saved` yet is not a rejection.
+   * Ids that were not written: a schema-protected/unknown achievement, a
+   * protected/unknown stat, a stat value that failed validation, a stat whose current
+   * value could not be read, or a set/clear call Steam itself refused. Every
+   * requested change is either counted in `saved` or listed here, so an empty list
+   * means every requested change was accepted; the UI keys a partial save off this.
    */
   rejected: string[]
 }
