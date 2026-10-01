@@ -24,6 +24,10 @@ export interface SaveSnapshot {
  * the write was in flight). Comparing against the snapshot rather than the sent
  * payload is what stops a stale untouched value from being resurrected as a
  * pending edit.
+ *
+ * A key missing from `snapshot` always keeps its live value. The failed-save path
+ * relies on that: its outcome is unknown rather than rejected, so it leaves the
+ * keys it sent out of the snapshot and the user's edits survive the re-read.
  */
 export function applyPartialSave(
   state: AppState,

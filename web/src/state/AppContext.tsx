@@ -9,7 +9,7 @@ import { translate, type Translate } from '../i18n'
 import type { GameChanges } from '../data/source'
 import { reducer, makeInitialState, type Action, type AppState } from './store'
 import { applyLoadedGame } from './applyLoadedGame'
-import { applyPartialSave } from './applyPartialSave'
+import { applyPartialSave, type SaveSnapshot } from './applyPartialSave'
 import { touchDetailCache } from './detailCache'
 import { appIdKey, mergeFreshGames } from './gameListMerge'
 import { progressIdsToRequest } from './progressBatch'
@@ -94,6 +94,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const toastTimer = useRef<number | undefined>(undefined)
   const cacheTimer = useRef<number | undefined>(undefined)
   const detailSeq = useRef(0)
+  /** Bumped per save, so a failed save's re-read is dropped once a newer save started,
+   *  and only the latest save clears `saving`. */
+  const saveSeq = useRef(0)
   /** When each game's detail was last applied — gates the silent revisit reload. */
   const loadedAt = useRef<Record<string, number>>({})
   /** Games whose on-disk completion was already requested since the last refresh. */
@@ -513,15 +516,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Object.keys(sw).forEach((k) => {
       if (sw[k] !== so[k]) changes.stats[k] = sw[k]
     })
+    const seq = saveSeq.current + 1
+    saveSeq.current = seq
     dispatch({ saving: true })
     try {
       const res = await source.saveChanges(appId, changes)
       if (res.rejected.length > 0) {
-        // Steam refused some changes (schema-protected/unknown, or an invalid value).
-        // Re-read ground truth so the UI never shows a rejected edit as saved — but keep
-        // any edit the user made while the write/reload was in flight (it stays pending).
-        // Keying off the explicit rejected list (not saved < n) avoids a false "partial
-        // save" when a change was simply a no-op (Steam reports those as not-applied too).
+        // Some changes were not written (schema-protected/unknown, an invalid value, or
+        // a Set* call Steam itself refused). Re-read ground truth so the UI never shows
+        // a rejected edit as saved — but keep any edit the user made while the
+        // write/reload was in flight (it stays pending). The backend lists every change
+        // it did not apply in `rejected`, so an empty list means all of them were written.
         const fresh = await source.loadGame(appId)
         // `aw`/`sw` are the working maps captured at save start (immutable), so
         // applyPartialSave can tell a genuine in-flight edit from an untouched key.
@@ -543,8 +548,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       showToast(tRef.current('toast.saveFailed', { msg: errMsg(e) }))
+      // A failed or timed-out save is not proof that nothing was written: some Set*
+      // calls may already have been applied, and Steam stores pending stats itself when
+      // the worker exits. So re-read ground truth and rebase the baseline onto it, the
+      // same way the partial-save branch does. Skipped once a newer save has started —
+      // that save reports its own outcome.
+      if (saveSeq.current === seq) {
+        // `saving` stays set until this re-read is applied, even though it can take as
+        // long as the save did: a retry started before then would diff against the
+        // stale baseline and could leave an edit Steam already took shown as unsaved
+        // — or a reverted one shown as saved.
+        // Only the keys that were *not* sent go in the snapshot: applyPartialSave keeps
+        // the live value of every key missing from it, so each edit the user asked to
+        // write survives the re-read — it stays pending unless Steam did apply it.
+        const unsent: SaveSnapshot = { ach: {}, stat: {} }
+        Object.keys(aw).forEach((k) => {
+          if (aw[k] === ao[k]) unsent.ach[k] = aw[k]
+        })
+        Object.keys(sw).forEach((k) => {
+          if (sw[k] === so[k]) unsent.stat[k] = sw[k]
+        })
+        try {
+          const fresh = await source.loadGame(appId)
+          dispatch((cur) =>
+            // Dropped if a newer save began meanwhile, or the game left the detail cache.
+            saveSeq.current === seq && cur.loaded[appId]
+              ? applyPartialSave(cur, appId, fresh, unsent)
+              : {},
+          )
+        } catch {
+          // Steam can't be read either — keep the current state; the edits stay pending.
+        }
+      }
     } finally {
-      dispatch({ saving: false })
+      // Only the latest save clears the flag; an older one settling late must not
+      // release Save under it.
+      if (saveSeq.current === seq) dispatch({ saving: false })
     }
   }, [source, showToast])
 

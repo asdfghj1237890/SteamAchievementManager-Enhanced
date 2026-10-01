@@ -86,6 +86,39 @@ describe('applyPartialSave', () => {
     expect(patch.achState![appId].D).toBe(true)
   })
 
+  it('keeps the live value of a key left out of the snapshot (failed-save rebase)', () => {
+    const appId = 'app1'
+    // A failed save sent A, B and kills; its snapshot holds only the unsent keys.
+    const snapshot: SaveSnapshot = { ach: { C: false }, stat: { deaths: 0 } }
+    const state = {
+      ...makeInitialState(),
+      activeAppId: appId,
+      loaded: { [appId]: game([ach('A', false), ach('B', false), ach('C', false)]) },
+      achState: { [appId]: { A: true, B: true, C: false } },
+      statState: { [appId]: { kills: 100, deaths: 0 } },
+      origAch: { [appId]: { A: false, B: false, C: false } },
+      origStat: { [appId]: { kills: 50, deaths: 0 } },
+      games: [],
+    }
+    // Ground truth: Steam applied A only, and C/deaths changed outside the app.
+    const fresh: Game = {
+      ...game([ach('A', true), ach('B', false), ach('C', true)]),
+      stats: [
+        { id: 'kills', name: 'kills', value: 50, extra: '', protected: false },
+        { id: 'deaths', name: 'deaths', value: 3, extra: '', protected: false },
+      ],
+    }
+
+    const patch = applyPartialSave(state, appId, fresh, snapshot)
+
+    // Sent edits keep the user's value; unsent, untouched keys take ground truth.
+    expect(patch.achState![appId]).toEqual({ A: true, B: true, C: true })
+    expect(patch.statState![appId]).toEqual({ kills: 100, deaths: 3 })
+    // Baseline is ground truth, so only B and kills still read as pending.
+    expect(patch.origAch![appId]).toEqual({ A: true, B: false, C: true })
+    expect(patch.origStat![appId]).toEqual({ kills: 50, deaths: 3 })
+  })
+
   it('keeps an in-flight stat edit but reverts a rejected one', () => {
     const appId = 'app1'
     // At save start kills was about to be sent (100) and deaths untouched (0).
