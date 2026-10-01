@@ -1,3 +1,4 @@
+import type { CloseRequestedEvent } from '@tauri-apps/api/window'
 import { isTauri } from '../data'
 
 // Window controls for the custom (decorations-less) title bar. No-ops on the web
@@ -31,4 +32,21 @@ export async function winShow(): Promise<void> {
   const win = await current()
   await win.show()
   await win.setFocus()
+}
+
+// For AppProvider's unsaved-changes guard. `handler` runs when the user closes the
+// window; unless it calls preventDefault(), Tauri then destroys the window by itself.
+// Resolves to the function that stops listening.
+export async function winOnCloseRequested(
+  handler: (event: CloseRequestedEvent) => void | Promise<void>,
+): Promise<() => void> {
+  if (!isTauri()) return () => {}
+  return (await current()).onCloseRequested(handler)
+}
+
+// Closes the window without asking again: winClose() raises another close request,
+// which the guard would hold a second time.
+export async function winDestroy(): Promise<void> {
+  if (!isTauri()) return
+  await (await current()).destroy()
 }

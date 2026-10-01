@@ -1126,7 +1126,8 @@ mod tests {
         ("plugin:window|set_focus", true),
         ("plugin:window|start_dragging", true),
         ("plugin:window|internal_toggle_maximize", true),
-        // state/AppContext.tsx: the version check and the unsaved-changes close guard
+        // AppProvider's version check (data/update.ts) and unsaved-changes close guard
+        // (lib/appWindow.ts)
         ("plugin:app|version", true),
         ("plugin:event|listen", true),
         ("plugin:event|unlisten", true),

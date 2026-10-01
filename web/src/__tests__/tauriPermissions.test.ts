@@ -18,16 +18,22 @@ import { AppProvider, useApp } from '../state/AppContext'
 // Nothing is vi.mock'ed: the installed @tauri-apps JS picks the commands, so they follow
 // a library upgrade by themselves.
 //
+// Every call into a Tauri plugin lives in lib/appWindow.ts or data/update.ts (MODULES),
+// and every export of those two is called here, one added later too. A test below fails
+// for any other file that imports @tauri-apps, bar the two in INVOKE_ONLY.
+//
 // Its limit: only code that runs here is recorded.
-// - lib/appWindow.ts, data/update.ts: every export is called (MODULES), new ones included.
-// - state/AppContext.tsx: driven by hand in beforeAll, on these paths only: mount (the
-//   version check, the close guard's listener), a close request with nothing unsaved, one
-//   with an unsaved edit and the confirmed quit after it (the provider's own destroy()),
-//   unmount. Saving, refreshing, navigating, installing an update: NOT run. Today those
-//   reach Tauri only through data/update.ts and the data source. A test below pins the
-//   file's own ways in (its @tauri-apps imports, its one getCurrentWindow() call, the
-//   members used on `win`), so a new one fails until it is driven. A window handle kept
-//   under another name, or passed on to another file, is not seen.
+// - Calling a wrapper sends what the call itself sends. A command that waits for an event,
+//   or for the caller to use what the wrapper resolved to, is recorded only if something
+//   here makes that happen. winOnCloseRequested() is the one such wrapper, so AppProvider
+//   is driven as well, in beforeAll: mounted, sent a close request with nothing unsaved
+//   (the library then destroys the window itself), sent one with an unsaved edit and the
+//   quit confirmed (the provider's winDestroy()), unmounted (the unlisten). Nothing else
+//   of the provider is driven: it can reach a plugin only through MODULES.
+// - A branch of a wrapper that the fake environment does not take is not recorded.
+//   Today those are the early returns (outside Tauri, no update found): they send nothing.
+// - The drag region's two commands are sent by a script Tauri injects: kept by hand in
+//   DRAG_REGION.
 
 // Read from disk rather than with `?raw`: the coverage report takes a raw import of a
 // src/ file for the file itself. (The node reference is explained in releaseManifest.test.ts.)
@@ -116,9 +122,7 @@ const recorded = () => [...new Set([...sent.filter((c) => c.startsWith('plugin:'
 
 /** Every export of these is called in beforeAll, with ARGS where it takes arguments. */
 const MODULES: Record<string, Record<string, unknown>> = { 'src/lib/appWindow.ts': appWindow, 'src/data/update.ts': update }
-const ARGS: Record<string, unknown[]> = { installLatestUpdate: [() => {}] }
-/** Driven by hand in beforeAll, on the paths the header lists. */
-const CONTEXT = 'src/state/AppContext.tsx'
+const ARGS: Record<string, unknown[]> = { installLatestUpdate: [() => {}], winOnCloseRequested: [() => {}] }
 
 const realFetch = globalThis.fetch
 beforeAll(async () => {
@@ -129,7 +133,7 @@ beforeAll(async () => {
   mockWindows('main')
   mockIPC(respond) // not shouldMockEvents: the mock would answer plugin:event|* itself, unrecorded
 
-  // CONTEXT, mounted as in the desktop shell: isTauri() is true under the mock, so its source is the real TauriSource.
+  // The provider, mounted as in the desktop shell: isTauri() is true under the mock, so its source is the real TauriSource.
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(HashRouter, null, createElement(AppProvider, null, children))
   const { result: app, unmount } = renderHook(useApp, { wrapper })
@@ -137,14 +141,14 @@ beforeAll(async () => {
     const guard = listeners.find((l) => l.event === 'tauri://close-requested')
     if (!guard) throw new Error('AppProvider registered no onCloseRequested listener: drive what it does now instead')
     return guard
-  }, { timeout: 5000 }) // behind the provider's lazy import of the window API
+  }, { timeout: 5000 }) // behind appWindow's lazy import of the window API
   // What Tauri does when the user closes the window: run the registered callback.
   const { runCallback } = window.__TAURI_INTERNALS__ as { runCallback: (id: number, data: unknown) => void }
   const requestClose = () => runCallback(handler, { event, id: handler, payload: null })
   // Nothing is unsaved, so the library's own wrapper goes on to destroy the window.
   await sendsOne('plugin:window|destroy', 'a close request with nothing unsaved', requestClose)
-  // With an unsaved edit the provider holds the close and asks. Confirming runs its own
-  // win.destroy(), the call that shipped ungranted: counted apart from the wrapper's above.
+  // With an unsaved edit the provider holds the close and asks. Confirming runs its
+  // winDestroy(), the call that shipped ungranted: counted apart from the library's above.
   act(() => app.current.openGame('10'))
   await waitFor(() => expect(app.current.state.loaded['10'], `Game 10 did not load. ${STALE}`).toBeDefined())
   act(() => app.current.toggleAch('10', 'a1', false))
@@ -161,11 +165,6 @@ afterAll(() => { globalThis.fetch = realFetch })
 
 // ---- confinement: no Tauri call from code that is not run above ----
 
-/** Each line of CONTEXT that names @tauri-apps: with its one getCurrentWindow() call, every way it has into Tauri. */
-const CONTEXT_TAURI = [
-  "import { getVersion } from '@tauri-apps/api/app'",
-  "const { getCurrentWindow } = await import('@tauri-apps/api/window')",
-]
 /** Not exercised. Trusted to import nothing but invoke, for the app's own commands, and the two helpers
  *  beside it that send no command at all (read in core.js of @tauri-apps/api 2.11.1). */
 const INVOKE_ONLY = ['src/components/ui/useCoverUrl.ts', 'src/data/tauriSource.ts']
@@ -237,9 +236,10 @@ describe('main window capability', () => {
     const importers = [...sources.keys()].filter((path) => tauriLines(path).length > 0).sort()
     expect(importers, 'A file that imports @tauri-apps has to be added to MODULES, where beforeAll calls its every '
       + 'export, or nothing checks the commands it sends; or, if it only uses invoke for the app\'s own commands, to '
-      + 'INVOKE_ONLY. (One that no longer imports it: take it off the list. A type-only import is ignored only '
-      + 'when written as a one-line `import type … from`.)')
-      .toEqual([...Object.keys(MODULES), CONTEXT, ...INVOKE_ONLY].sort())
+      + 'INVOKE_ONLY. A component or the provider cannot be exercised that way: have it call a function exported '
+      + 'by a file in MODULES instead. (One that no longer imports it: take it off the list. A type-only import '
+      + 'is ignored only when written as a one-line `import type … from`.)')
+      .toEqual([...Object.keys(MODULES), ...INVOKE_ONLY].sort())
     for (const path of INVOKE_ONLY) {
       expect(tauriLines(path).filter((line) => !INVOKE_IMPORT.test(line)), `${path} is not exercised here, so `
         + 'it may import only invoke, convertFileSrc and isTauri (these two send no command), in one line, from '
@@ -249,20 +249,6 @@ describe('main window capability', () => {
     const byName = [...sources.keys()].filter((path) => code(path).some((line) => /['"`]plugin:/.test(line))).sort()
     expect(byName, 'A plugin command sent by name is recorded by nothing: call the library function instead, from '
       + 'a file in MODULES').toEqual([])
-  })
-
-  it('knows every way state/AppContext.tsx has into Tauri, as only some of its paths run here', () => {
-    const text = code(CONTEXT).join('\n')
-    const found = {
-      imports: tauriLines(CONTEXT),
-      getCurrentWindowCalls: text.split('getCurrentWindow(').length - 1,
-      // The window is held as `win`; a member used on it behind a branch beforeAll does not take is recorded by nothing.
-      onWin: [...new Set([...text.matchAll(/\bwin\.(\w+)/g)].map(([, member]) => member))],
-    }
-    expect(found, `${CONTEXT} reaches Tauri in a way this test does not know, and a path of that file beforeAll `
-      + 'does not take is recorded by nothing. Drive the new call in beforeAll of this test and update what is '
-      + 'expected here, or move it behind src/lib/appWindow.ts (whose exports are exercised automatically).')
-      .toEqual({ imports: CONTEXT_TAURI, getCurrentWindowCalls: 1, onWin: ['onCloseRequested', 'destroy'] })
   })
 
   it('grants every plugin command the frontend sends', () => {
