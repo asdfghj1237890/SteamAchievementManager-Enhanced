@@ -89,12 +89,12 @@ to profile by hand at that scale.
 ```bash
 cargo fmt --manifest-path steam-core/Cargo.toml --all -- --check
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-cargo test --manifest-path steam-core/Cargo.toml --all-targets --all-features
-cargo clippy --manifest-path steam-core/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features
-cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --manifest-path steam-core/Cargo.toml --all-targets --all-features
+cargo clippy --locked --manifest-path steam-core/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features -- -D warnings
 
-npm run tauri -- build --debug --no-bundle --ci
+npm run tauri -- build --debug --no-bundle --ci -- --locked
 npm run smoke:native
 ```
 

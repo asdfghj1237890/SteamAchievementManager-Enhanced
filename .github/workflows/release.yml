@@ -19,6 +19,12 @@ on:
 permissions:
   contents: read
 
+# The release tag. Scripts read it as "$TAG" instead of having the expression pasted
+# into their source: a manually dispatched tag is free text, and text substituted
+# into a `run:` script is parsed by the shell as code.
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
 jobs:
   # Releases reuse the same full test matrix as pull requests, so a tag cannot
   # publish by bypassing browser, Rust, accessibility, or native smoke gates.
@@ -32,9 +38,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Tag must match the app version
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="$TAG"
           want="${tag#v}"
           conf=$(jq -r '.version' web/src-tauri/tauri.conf.json)
           pkg=$(jq -r '.version' web/package.json)
@@ -49,20 +57,25 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # No Swatinem/rust-cache here (test.yml keeps it): the job that signs compiles
+      # from scratch instead of restoring a target/ directory written by an earlier
+      # run. A cache saved by a tag run is never restored by another tag, so it only
+      # ever sped up re-runs of the same tag.
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.96.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: web/src-tauri -> target
+      # --ignore-scripts: no dependency's install script runs in the signing job. The
+      # build needs none (the only one in package-lock.json is the optional fsevents).
       - name: Install frontend dependencies
         working-directory: web
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Require the updater signing key
         shell: bash
         env:
@@ -72,17 +85,40 @@ jobs:
             echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Release packages must be minisign-signed for the in-app updater — add the private key and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets (see web/TESTING.md, Releases and updates)."
             exit 1
           fi
-      # Two Windows assets from one build: the portable single .exe
+      # Compile and sign are separate steps so the updater signing key stays
+      # confidential: this step runs all the third-party build-time code — the
+      # frontend build (tsc, vite and its plugins) and cargo (every crate's build.rs
+      # and proc-macros) — and has NO key in its environment. npm consumes the first
+      # `--`; tauri hands what follows the second one to cargo, so `--locked` makes
+      # cargo build exactly the committed Cargo.lock or fail.
+      # Limit: the split only stops build-time code from reading the key out of its
+      # own environment; it does not make the artifact trustworthy. Both steps share
+      # one runner, so a malicious build-time dependency can still tamper with the
+      # app.exe that the next step packages and signs, or reach the key indirectly by
+      # persisting into that step: through GITHUB_PATH / GITHUB_ENV, or by replacing
+      # what it runs (node_modules, the tauri CLI binary). Full isolation would need
+      # a separate signing job on a fresh runner.
+      # The timeout is for a hung build: this one is cold (no rust-cache, fat LTO),
+      # and without a limit it would run to the 6-hour job default.
+      - name: Compile the release executable (no signing key)
+        working-directory: web
+        shell: bash
+        timeout-minutes: 60
+        run: npm run tauri -- build --no-bundle -- --locked
+      # Two Windows assets from that one compile: the portable single .exe
       # (target/release/app.exe) and the NSIS installer the in-app updater installs
-      # from. createUpdaterArtifacts signs the installer with the minisign key and
-      # writes the .sig next to it; the build fails if the key is missing.
-      - name: Build portable executable and signed NSIS installer
+      # from. `tauri bundle` packages the already-compiled executable — it does not
+      # rerun the frontend build or cargo — and createUpdaterArtifacts signs the
+      # installer with the minisign key and writes the .sig next to it; the step
+      # fails if the key is missing. Apart from the emptiness check above, this is
+      # the only step that gets the key.
+      - name: Bundle and sign the NSIS installer
         working-directory: web
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri -- build --bundles nsis
+        run: npm run tauri -- bundle --bundles nsis
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -98,20 +134,20 @@ jobs:
     runs-on: macos-latest # Apple Silicon (arm64)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # No Swatinem/rust-cache and no install scripts, as in build-windows.
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.96.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: web/src-tauri -> target
       - name: Install frontend dependencies
         working-directory: web
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Require the updater signing key
         env:
           KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -120,21 +156,35 @@ jobs:
             echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Release packages must be minisign-signed for the in-app updater — add the private key and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets (see web/TESTING.md, Releases and updates)."
             exit 1
           fi
-      # Bundles "SAM Enhanced.app" into a .dmg for manual installs, plus the signed
-      # .app.tar.gz the in-app updater installs from. Host target on macos-latest is
-      # aarch64-apple-darwin, so this is an Apple Silicon build.
+      # Same split as build-windows, for the same reason: the frontend build and
+      # cargo (build scripts, proc-macros) run here WITHOUT the updater signing key,
+      # and `--locked` pins cargo to the committed Cargo.lock. The same limit applies:
+      # build-time code cannot read the key from its environment, but on this shared
+      # runner it can still tamper with the binary that the next step bundles and
+      # signs, or persist into that step (GITHUB_PATH / GITHUB_ENV, node_modules, the
+      # tauri CLI binary) and reach the key there; only a separate signing job on a
+      # fresh runner would rule that out. Same timeout, for a hung cold build. Host
+      # target on macos-latest is aarch64-apple-darwin, so this is an Apple Silicon build.
+      - name: Compile the release binary (no signing key, Apple Silicon)
+        working-directory: web
+        timeout-minutes: 60
+        run: npm run tauri -- build --no-bundle -- --locked
+      # Bundles the already-compiled binary into "SAM Enhanced.app" and a .dmg for
+      # manual installs, plus the signed .app.tar.gz the in-app updater installs from.
+      # Apart from the emptiness check above, this is the only step that gets the key;
+      # `tauri bundle` does not rerun the frontend build or cargo.
       # The .dmg window layout (background, icon positions from bundle.macOS.dmg) is
       # applied by an AppleScript that drives Finder. Tauri skips that script whenever
       # CI=true, which ships a bare, default-sized window; TAURI_BUNDLER_DMG_IGNORE_CI
       # turns it back on. The timeout guards against a Finder AppleEvent that hangs.
-      - name: Build .dmg and signed updater bundle (release, Apple Silicon)
+      - name: Bundle .dmg and signed updater bundle
         working-directory: web
         timeout-minutes: 45
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_BUNDLER_DMG_IGNORE_CI: 'true'
-        run: npm run tauri -- build --bundles app dmg
+        run: npm run tauri -- bundle --bundles app dmg
       # Finder writes the layout into the volume's .DS_Store. No .DS_Store (or one that
       # does not reference the background) means the AppleScript silently did not run.
       - name: Verify the .dmg window layout was applied
@@ -176,6 +226,7 @@ jobs:
       - name: Checkout release-manifest script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           path: repo
           sparse-checkout: |
             web/scripts/release-manifest.mjs
@@ -190,7 +241,7 @@ jobs:
         id: stage
         run: |
           set -euo pipefail
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="$TAG"
           version="${tag#v}"
           base="SteamAchievementManager-Enhanced-${tag}"
           win="${base}-windows-x64.exe"
@@ -238,9 +289,11 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          STAGE_TAG: ${{ steps.stage.outputs.tag }}
+          STAGE_ASSETS: ${{ steps.stage.outputs.assets }}
         run: |
-          tag="${{ steps.stage.outputs.tag }}"
-          assets="${{ steps.stage.outputs.assets }}"
+          tag="$STAGE_TAG"
+          assets="$STAGE_ASSETS"
           notes=$'Cross-platform build.\n\n## Windows\n- **Installer** (`…-windows-x64-setup.exe`, recommended): per-user install, no admin rights needed. From this version on it updates itself from inside the app.\n- **Portable** (`…-windows-x64.exe`): double-click it — no installation. A portable copy cannot update itself; the app offers this page instead.\n\nBoth need Windows 10/11 with the WebView2 runtime (preinstalled on current Windows).\n\n## macOS (Apple Silicon)\nDownload the `.dmg`, open it, and drag `SAM Enhanced` into Applications. This build is **unsigned**, so on first launch right-click the app -> Open -> Open, or run `xattr -cr "/Applications/SAM Enhanced.app"` once. Once installed it updates itself from inside the app.\n\n## Verifying a download\n`SHA256SUMS.txt` lists the SHA-256 of every asset. Windows: `certutil -hashfile <file> SHA256`. macOS: `shasum -a 256 <file>`. In-app updates are verified automatically: each package carries a minisign signature (`.sig`) that the app checks against the public key built into it before installing.\n\nBoth platforms require Steam installed, running, and logged in.\n\n⚠️ This writes to your real Steam account when you unlock achievements or edit stats.'
           # This job has no checkout, so gh has no local git remote to infer the
           # repo from — pass it explicitly or `gh release` fails with
@@ -267,6 +320,7 @@ jobs:
       group: latest-json
       cancel-in-progress: false
     steps:
+      # The only checkout that keeps its credentials: this job pushes with git.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: master
@@ -275,7 +329,7 @@ jobs:
           node-version: 24
       - name: Write latest.json from the release tag and push (monotonic)
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="$TAG"
           new="${tag#v}"
           cur=$(jq -r '.version // "0.0.0"' latest.json 2>/dev/null || echo "0.0.0")
           # Refuse to downgrade: only write when new >= cur, so re-running an older

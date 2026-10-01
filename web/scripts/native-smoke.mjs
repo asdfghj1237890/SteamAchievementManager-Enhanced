@@ -14,7 +14,7 @@ const binary = process.env.SAM_NATIVE_BINARY
 
 if (!existsSync(binary)) {
   console.error(`Native smoke binary not found: ${binary}`)
-  console.error('Build it first: npm run tauri -- build --debug --no-bundle --ci')
+  console.error('Build it first: npm run tauri -- build --debug --no-bundle --ci -- --locked')
   process.exit(2)
 }
 
