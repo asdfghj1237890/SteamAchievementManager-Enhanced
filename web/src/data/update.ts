@@ -3,7 +3,9 @@ import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import type { DownloadEvent } from '../lib/updater'
 
-/** Latest published version from the signed release manifest (Tauri only). */
+/** Latest published version from the release manifest (Tauri only). The manifest is
+ *  not authenticated — only the update packages are signature-checked — so Rust
+ *  returns the version only when it is a plain `x.y.z`. */
 export async function fetchLatestVersion(): Promise<string> {
   return invoke<string>('latest_version')
 }

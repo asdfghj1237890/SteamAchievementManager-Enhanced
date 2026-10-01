@@ -1,5 +1,7 @@
 export declare function stripOneTrailingNewline(s: string): string
 
+export declare function signedVersion(sig: string): string | undefined
+
 export interface BuildLatestJsonArgs {
   version: string
   pubDate: string

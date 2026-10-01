@@ -15,6 +15,7 @@ import {
   formatLatestJson,
   formatPubDate,
   shouldWriteVersion,
+  signedVersion,
   stripOneTrailingNewline,
 } from '../../scripts/release-manifest.mjs'
 
@@ -24,6 +25,25 @@ import {
 // exercised by cutting a real release — hence a dedicated, offline test file. See
 // web/src/__tests__/tauriConfig.test.ts for the precedent of a test under src/ reading
 // files outside src/.
+
+// A .sig as the Tauri CLI writes it next to a signed updater package: base64 of minisign
+// signature text, whose third line is the trusted comment. The two signature lines are
+// placeholders — the script reads the comment, it does not verify anything.
+const minisignText = (trustedComment: string, eol = '\n') =>
+  [
+    'untrusted comment: signature from tauri secret key',
+    'c2lnbmF0dXJl',
+    `trusted comment: ${trustedComment}`,
+    'Z2xvYmFsIHNpZ25hdHVyZQ==',
+    '',
+  ].join(eol)
+const encodeSig = (text: string) => Buffer.from(text, 'utf8').toString('base64')
+const makeSig = (trustedComment: string) => encodeSig(minisignText(trustedComment))
+
+const WIN_SIG = makeSig('timestamp:1790342845\tfile:SAM Enhanced_1.2.3_x64-setup.exe\tversion:1.2.3')
+const MAC_SIG = makeSig('timestamp:1790342846\tfile:SAM Enhanced.app.tar.gz\tversion:1.2.3')
+// What a Tauri CLI from before the version field existed produces.
+const UNVERSIONED_SIG = makeSig('timestamp:1789003327\tfile:SAM Enhanced_1.2.3_x64-setup.exe')
 
 describe('stripOneTrailingNewline', () => {
   it('strips exactly one trailing newline', () => {
@@ -53,9 +73,9 @@ describe('buildLatestJson', () => {
     pubDate: '2026-01-02T03:04:05Z',
     notes: 'https://example.com/notes',
     winUrl: 'https://example.com/win.exe',
-    winSig: 'winsig\n',
+    winSig: `${WIN_SIG}\n`,
     macUrl: 'https://example.com/mac.tar.gz',
-    macSig: 'macsig',
+    macSig: MAC_SIG,
   }
 
   it('produces the exact top-level key order the jq filter used', () => {
@@ -68,8 +88,8 @@ describe('buildLatestJson', () => {
 
   it('strips a trailing newline from each raw .sig file content', () => {
     const manifest = buildLatestJson(args)
-    expect(manifest.platforms['windows-x86_64'].signature).toBe('winsig')
-    expect(manifest.platforms['darwin-aarch64'].signature).toBe('macsig')
+    expect(manifest.platforms['windows-x86_64'].signature).toBe(WIN_SIG)
+    expect(manifest.platforms['darwin-aarch64'].signature).toBe(MAC_SIG)
   })
 
   it('maps fields to the right platform and key names', () => {
@@ -79,10 +99,96 @@ describe('buildLatestJson', () => {
       pub_date: '2026-01-02T03:04:05Z',
       notes: 'https://example.com/notes',
       platforms: {
-        'windows-x86_64': { url: 'https://example.com/win.exe', signature: 'winsig' },
-        'darwin-aarch64': { url: 'https://example.com/mac.tar.gz', signature: 'macsig' },
+        'windows-x86_64': { url: 'https://example.com/win.exe', signature: WIN_SIG },
+        'darwin-aarch64': { url: 'https://example.com/mac.tar.gz', signature: MAC_SIG },
       },
     })
+  })
+
+  // The manifest is unsigned; with requireSignedVersion the app only trusts its `version`
+  // when the signature's trusted comment names the same one. A signature that cannot
+  // satisfy that must never be published — it would strand every installed copy.
+  it('refuses a signature with no version in its trusted comment, naming the platform', () => {
+    expect(() => buildLatestJson({ ...args, winSig: UNVERSIONED_SIG })).toThrow(
+      /windows-x86_64 signature has no "version:" field/,
+    )
+    expect(() => buildLatestJson({ ...args, macSig: UNVERSIONED_SIG })).toThrow(
+      /darwin-aarch64 signature has no "version:" field/,
+    )
+  })
+
+  it('refuses a signature that was signed for another version', () => {
+    expect(() => buildLatestJson({ ...args, version: '1.2.4' })).toThrow(
+      /windows-x86_64 signature was signed for version "1\.2\.3", not the release version "1\.2\.4"/,
+    )
+    const staleMac = makeSig('timestamp:1\tfile:SAM Enhanced.app.tar.gz\tversion:1.2.2')
+    expect(() => buildLatestJson({ ...args, macSig: staleMac })).toThrow(
+      /darwin-aarch64 signature was signed for version "1\.2\.2", not the release version "1\.2\.3"/,
+    )
+  })
+
+  it('compares the signed version exactly, not by prefix', () => {
+    const longer = makeSig('timestamp:1\tfile:a.exe\tversion:1.2.30')
+    expect(() => buildLatestJson({ ...args, winSig: longer })).toThrow(/signed for version "1\.2\.30"/)
+  })
+
+  it('refuses a signature that is not a minisign signature at all', () => {
+    expect(() => buildLatestJson({ ...args, winSig: 'winsig\n' })).toThrow(
+      /windows-x86_64 signature is not base64/,
+    )
+    expect(() => buildLatestJson({ ...args, macSig: '' })).toThrow(
+      /darwin-aarch64 signature is not base64/,
+    )
+  })
+})
+
+describe('signedVersion', () => {
+  it('reads the version out of the trusted comment the Tauri CLI writes', () => {
+    expect(signedVersion(WIN_SIG)).toBe('1.2.3')
+    expect(signedVersion(MAC_SIG)).toBe('1.2.3')
+  })
+
+  it('accepts the one trailing newline the manifest strips', () => {
+    expect(signedVersion(`${WIN_SIG}\n`)).toBe('1.2.3')
+  })
+
+  it('reads the version wherever the field sits in the comment', () => {
+    expect(signedVersion(makeSig('version:2.0.0\ttimestamp:1\tfile:a.exe'))).toBe('2.0.0')
+  })
+
+  it('tolerates CRLF line endings inside the signature text', () => {
+    const text = minisignText('timestamp:1\tfile:a.exe\tversion:1.2.3', '\r\n')
+    expect(signedVersion(encodeSig(text))).toBe('1.2.3')
+  })
+
+  it('returns undefined when the trusted comment has no version field', () => {
+    expect(signedVersion(UNVERSIONED_SIG)).toBeUndefined()
+  })
+
+  it('does not match a field that merely contains "version:"', () => {
+    expect(signedVersion(makeSig('timestamp:1\tfile:app-version:2.zip'))).toBeUndefined()
+  })
+
+  it('throws on content that is not canonical base64', () => {
+    for (const bad of ['', '\n', 'not base64!', 'winsig', `${WIN_SIG}\r\n`, `${WIN_SIG} `]) {
+      expect(() => signedVersion(bad)).toThrow(/is not base64/)
+    }
+  })
+
+  it('throws when the base64 does not decode to UTF-8 text', () => {
+    expect(() => signedVersion(Buffer.from([0xff, 0xfe, 0xfd]).toString('base64'))).toThrow(
+      /does not decode to UTF-8 text/,
+    )
+  })
+
+  it('throws when the decoded text has no trusted comment on its third line', () => {
+    const noTrusted = ['untrusted comment: signature from tauri secret key', 'c2lnbmF0dXJl', ''].join('\n')
+    // The trusted comment is only trusted in its place: a "version:" on the untrusted
+    // first line must not be picked up.
+    const misplaced = ['trusted comment: version:1.2.3', 'c2lnbmF0dXJl', 'Z2xvYmFs', ''].join('\n')
+    for (const text of [noTrusted, misplaced, 'version:1.2.3']) {
+      expect(() => signedVersion(encodeSig(text))).toThrow(/is not minisign text with a "trusted comment:" line/)
+    }
   })
 })
 
@@ -93,9 +199,9 @@ describe('formatLatestJson', () => {
       pubDate: '2026-01-02T03:04:05Z',
       notes: 'https://example.com/notes',
       winUrl: 'https://example.com/win.exe',
-      winSig: 'winsig\n',
+      winSig: `${WIN_SIG}\n`,
       macUrl: 'https://example.com/mac.tar.gz',
-      macSig: 'macsig',
+      macSig: MAC_SIG,
     }
     const expected = `{
   "version": "1.2.3",
@@ -104,11 +210,11 @@ describe('formatLatestJson', () => {
   "platforms": {
     "windows-x86_64": {
       "url": "https://example.com/win.exe",
-      "signature": "winsig"
+      "signature": "${WIN_SIG}"
     },
     "darwin-aarch64": {
       "url": "https://example.com/mac.tar.gz",
-      "signature": "macsig"
+      "signature": "${MAC_SIG}"
     }
   }
 }
@@ -160,36 +266,40 @@ describe('compareVersions / shouldWriteVersion', () => {
 const scriptPath = fileURLToPath(new URL('../../scripts/release-manifest.mjs', import.meta.url))
 
 describe('CLI (build subcommand)', () => {
+  const build = (dir: string, winSig: string, macSig: string) => {
+    const winSigPath = join(dir, 'win.sig')
+    const macSigPath = join(dir, 'mac.sig')
+    writeFileSync(winSigPath, winSig)
+    writeFileSync(macSigPath, macSig)
+    const result = spawnSync(
+      process.execPath,
+      [
+        scriptPath,
+        'build',
+        '--version',
+        '1.2.3',
+        '--notes',
+        'https://example.com/notes',
+        '--win-url',
+        'https://example.com/win.exe',
+        '--win-sig',
+        winSigPath,
+        '--mac-url',
+        'https://example.com/mac.tar.gz',
+        '--mac-sig',
+        macSigPath,
+        '--pub-date',
+        '2026-01-02T03:04:05Z',
+      ],
+      { encoding: 'utf8' },
+    )
+    return { result, winSigPath, macSigPath }
+  }
+
   it('reads .sig files by path and writes the manifest to stdout', () => {
     const dir = mkdtempSync(join(tmpdir(), 'release-manifest-test-'))
     try {
-      const winSigPath = join(dir, 'win.sig')
-      const macSigPath = join(dir, 'mac.sig')
-      writeFileSync(winSigPath, 'winsig\n')
-      writeFileSync(macSigPath, 'macsig')
-
-      const result = spawnSync(
-        process.execPath,
-        [
-          scriptPath,
-          'build',
-          '--version',
-          '1.2.3',
-          '--notes',
-          'https://example.com/notes',
-          '--win-url',
-          'https://example.com/win.exe',
-          '--win-sig',
-          winSigPath,
-          '--mac-url',
-          'https://example.com/mac.tar.gz',
-          '--mac-sig',
-          macSigPath,
-          '--pub-date',
-          '2026-01-02T03:04:05Z',
-        ],
-        { encoding: 'utf8' },
-      )
+      const { result, winSigPath, macSigPath } = build(dir, `${WIN_SIG}\n`, MAC_SIG)
 
       expect(result.status).toBe(0)
       expect(result.stdout).toBe(
@@ -205,6 +315,35 @@ describe('CLI (build subcommand)', () => {
           }),
         ),
       )
+      expect(JSON.parse(result.stdout).platforms['windows-x86_64'].signature).toBe(WIN_SIG)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // release.yml redirects stdout straight into latest.json under `set -e`: a refusal has
+  // to be a non-zero exit with nothing on stdout, so no partial manifest can be published.
+  it.each<[string, string, string, RegExp]>([
+    [
+      'a signature without a signed version',
+      UNVERSIONED_SIG,
+      MAC_SIG,
+      /windows-x86_64 signature has no "version:" field/,
+    ],
+    [
+      'a signature signed for another version',
+      WIN_SIG,
+      makeSig('timestamp:1\tfile:SAM Enhanced.app.tar.gz\tversion:1.2.2'),
+      /darwin-aarch64 signature was signed for version "1\.2\.2"/,
+    ],
+    ['a file that is not a signature', 'winsig\n', MAC_SIG, /windows-x86_64 signature is not base64/],
+  ])('exits non-zero and prints no manifest for %s', (_name, winSig, macSig, message) => {
+    const dir = mkdtempSync(join(tmpdir(), 'release-manifest-test-'))
+    try {
+      const { result } = build(dir, winSig, macSig)
+      expect(result.status).toBe(1)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toMatch(message)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -26,11 +26,90 @@ export function stripOneTrailingNewline(s) {
   return s.endsWith('\n') ? s.slice(0, -1) : s
 }
 
+// Canonical, padded base64 — what the app's strict decoder accepts. Node's own
+// `Buffer.from(s, 'base64')` silently skips characters outside the alphabet.
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const TRUSTED_COMMENT = 'trusted comment: '
+const VERSION_FIELD = 'version:'
+
+/**
+ * Reads the version a Tauri updater signature was signed for, or `undefined` when the
+ * signature carries none (Tauri CLI releases from before the field existed leave it out).
+ *
+ * A `.sig` file holds base64 of minisign signature text:
+ *
+ *   untrusted comment: signature from tauri secret key
+ *   <base64 signature>
+ *   trusted comment: timestamp:<n>\tfile:<package name>\tversion:<x.y.z>
+ *   <base64 global signature>
+ *
+ * Parsed the way the app reads it on the other end (tauri-plugin-updater's
+ * `signed_version` over minisign-verify's `Signature::decode`): the trusted comment is
+ * the third line, and the version is the first tab-separated field that starts with
+ * "version:". Throws when `sig` is not such a signature at all.
+ *
+ * This reads the comment only; it does not verify the signature. The app does that,
+ * against the public key built into it.
+ * @param {string} sig raw `.sig` file content
+ * @returns {string | undefined}
+ */
+export function signedVersion(sig) {
+  const encoded = stripOneTrailingNewline(sig)
+  if (!encoded || !BASE64.test(encoded)) throw new Error('is not base64')
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(encoded, 'base64'))
+  } catch {
+    throw new Error('does not decode to UTF-8 text')
+  }
+  const line = text.split('\n')[2]?.replace(/\r$/, '')
+  if (!line?.startsWith(TRUSTED_COMMENT)) {
+    throw new Error('is not minisign text with a "trusted comment:" line')
+  }
+  return line
+    .slice(TRUSTED_COMMENT.length)
+    .split('\t')
+    .find((field) => field.startsWith(VERSION_FIELD))
+    ?.slice(VERSION_FIELD.length)
+}
+
+/**
+ * Fails closed unless `sig` was signed for exactly `version`.
+ *
+ * latest.json itself is unsigned; only the package bytes are. With `requireSignedVersion`
+ * on, the app binds the manifest's `version` to the one inside the signature's trusted
+ * comment and rejects the update when that field is missing or different. Publishing such
+ * a signature would strand every installed copy on its current version, so refuse to
+ * build the manifest instead.
+ * @param {string} platform
+ * @param {string} sig raw `.sig` file content
+ * @param {string} version
+ */
+function requireSignedVersion(platform, sig, version) {
+  let signed
+  try {
+    signed = signedVersion(sig)
+  } catch (e) {
+    throw new Error(`${platform} signature ${e.message}`, { cause: e })
+  }
+  if (signed === undefined) {
+    throw new Error(
+      `${platform} signature has no "version:" field in its trusted comment — ` +
+        'the app (requireSignedVersion) would reject this update. Re-sign with a Tauri CLI that records it.',
+    )
+  }
+  if (signed !== version) {
+    throw new Error(
+      `${platform} signature was signed for version "${signed}", not the release version "${version}"`,
+    )
+  }
+}
+
 /**
  * Builds the updater manifest object with the exact key order the jq filter in
  * release.yml produced (version, pub_date, notes, platforms.windows-x86_64,
  * platforms.darwin-aarch64), so `formatLatestJson` output matches jq's pretty-print
- * byte for byte.
+ * byte for byte. Throws unless both signatures were signed for `version`.
  * @param {{
  *   version: string,
  *   pubDate: string,
@@ -42,6 +121,8 @@ export function stripOneTrailingNewline(s) {
  * }} args
  */
 export function buildLatestJson({ version, pubDate, notes, winUrl, winSig, macUrl, macSig }) {
+  requireSignedVersion('windows-x86_64', winSig, version)
+  requireSignedVersion('darwin-aarch64', macSig, version)
   return {
     version,
     pub_date: pubDate,
@@ -136,15 +217,25 @@ function runBuild(rest) {
     },
   })
   requireAll(values, ['version', 'notes', 'win-url', 'win-sig', 'mac-url', 'mac-sig'], usage)
-  const manifest = buildLatestJson({
-    version: values.version,
-    pubDate: values['pub-date'] ?? formatPubDate(),
-    notes: values.notes,
-    winUrl: values['win-url'],
-    winSig: readFileSync(values['win-sig'], 'utf8'),
-    macUrl: values['mac-url'],
-    macSig: readFileSync(values['mac-sig'], 'utf8'),
-  })
+  const winSig = readFileSync(values['win-sig'], 'utf8')
+  const macSig = readFileSync(values['mac-sig'], 'utf8')
+  // Nothing reaches stdout unless the manifest is complete: the workflow redirects it
+  // straight into latest.json.
+  let manifest
+  try {
+    manifest = buildLatestJson({
+      version: values.version,
+      pubDate: values['pub-date'] ?? formatPubDate(),
+      notes: values.notes,
+      winUrl: values['win-url'],
+      winSig,
+      macUrl: values['mac-url'],
+      macSig,
+    })
+  } catch (e) {
+    console.error(`release-manifest.mjs: ${e.message}`)
+    process.exit(1)
+  }
   process.stdout.write(formatLatestJson(manifest))
 }
 
