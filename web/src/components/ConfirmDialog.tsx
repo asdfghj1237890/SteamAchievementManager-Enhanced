@@ -4,23 +4,40 @@ import { useApp } from '../state/AppContext'
 /**
  * App-wide confirmation modal. Driven by the `confirm` request in AppContext:
  * `requestConfirm({ message, confirmLabel, danger?, onConfirm })` opens it, and the
- * user's choice runs `confirmResolve(true|false)`. Enter confirms, Esc / overlay
- * click / Cancel dismisses. Used for bulk edits, stat reset, and the unsaved-changes
- * guards on navigation and app close.
+ * user's choice runs `confirmResolve(true|false)`. Esc / overlay click / Cancel
+ * dismisses. Enter is not handled globally: it only activates the focused button
+ * (Cancel by default for `danger` requests, the confirm button otherwise), and Tab
+ * is trapped between the two buttons. Used for bulk edits, stat reset, and the
+ * unsaved-changes guards on navigation and app close.
  */
 export default function ConfirmDialog() {
   const { confirm, confirmResolve, t } = useApp()
+  const cancelBtnRef = useRef<HTMLButtonElement | null>(null)
   const confirmBtnRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
-    if (confirm) confirmBtnRef.current?.focus()
+    if (!confirm) return
+    // Destructive requests start on Cancel, so a reflexive Enter / Space is harmless.
+    const initial = confirm.danger ? cancelBtnRef.current : confirmBtnRef.current
+    initial?.focus()
   }, [confirm])
 
   useEffect(() => {
     if (!confirm) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') confirmResolve(false)
-      else if (e.key === 'Enter') confirmResolve(true)
+      // Enter only acts through the focused button's own activation. Swallow auto-repeat
+      // so a key still held from the action that opened the dialog cannot press it.
+      else if (e.key === 'Enter' && e.repeat) e.preventDefault()
+      else if (e.key === 'Tab') {
+        // Focus trap: cycle between the two buttons, wherever focus currently is.
+        e.preventDefault()
+        const cancel = cancelBtnRef.current
+        const ok = confirmBtnRef.current
+        const active = document.activeElement
+        const next = e.shiftKey ? (active === ok ? cancel : ok) : (active === cancel ? ok : cancel)
+        next?.focus()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -51,6 +68,7 @@ export default function ConfirmDialog() {
         <div style={{ fontSize: '14px', lineHeight: 1.6 }}>{confirm.message}</div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
           <button
+            ref={cancelBtnRef}
             style={{ ...btnBase, background: 'var(--s2)', color: 'var(--t2)' }}
             onClick={() => confirmResolve(false)}
           >

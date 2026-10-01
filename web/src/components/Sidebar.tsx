@@ -281,7 +281,12 @@ export default function Sidebar() {
               if (addError) setAddError(false)
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onAdd()
+              if (e.key === 'Enter') {
+                // onAdd can open the unsaved-changes dialog, which takes focus at once.
+                // A prevented keydown has no keypress, so this Enter cannot confirm it.
+                e.preventDefault()
+                onAdd()
+              }
             }}
             placeholder={t('sidebar.addPlaceholder')}
             aria-invalid={addError}
