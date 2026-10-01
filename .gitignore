@@ -416,3 +416,14 @@ CLAUDE.local.md
 
 # macOS Finder metadata
 .DS_Store
+
+# Key and env material. The updater's minisign private key lives outside the repo (the
+# maintainer's machine and CI secrets); these rules keep a stray copy, a certificate, or
+# a dotenv file from being committed by accident.
+*.key
+*.key.password
+*.pem
+*.p12
+.env
+.env.*
+!.env.example
