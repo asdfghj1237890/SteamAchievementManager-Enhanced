@@ -1113,4 +1113,67 @@ mod tests {
         assert!(!has_nsis_uninstaller(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// What Tauri's ACL has to answer for a plugin command sent by the main window from
+    /// the app's own origin. `true`: the frontend invokes it, so capabilities/default.json
+    /// must grant it. `false`: never granted — these show the answer is a real decision.
+    const MAIN_WINDOW_ACL: &[(&str, bool)] = &[
+        // lib/appWindow.ts and the title bar's drag region
+        ("plugin:window|minimize", true),
+        ("plugin:window|toggle_maximize", true),
+        ("plugin:window|close", true),
+        ("plugin:window|show", true),
+        ("plugin:window|set_focus", true),
+        ("plugin:window|start_dragging", true),
+        ("plugin:window|internal_toggle_maximize", true),
+        // state/AppContext.tsx: the version check and the unsaved-changes close guard
+        ("plugin:app|version", true),
+        ("plugin:event|listen", true),
+        ("plugin:event|unlisten", true),
+        ("plugin:window|destroy", true),
+        // data/update.ts
+        ("plugin:updater|check", true),
+        ("plugin:updater|download_and_install", true),
+        ("plugin:process|restart", true),
+        // not granted
+        ("plugin:process|exit", false),
+        ("plugin:updater|download", false),
+        ("plugin:updater|install", false),
+        ("plugin:window|maximize", false),
+        ("plugin:window|set_title", false),
+    ];
+
+    #[test]
+    fn main_window_acl_allows_what_the_frontend_invokes_and_denies_what_is_not_granted() {
+        // The tauri.conf.json and capabilities/ that `run()` compiles in, resolved into the
+        // RuntimeAuthority Tauri asks before dispatching any `plugin:` IPC call. Only its
+        // decision is read: no command is invoked, so no window, updater or restart runs.
+        // `test = true` leaves out the macOS Info.plist embed, which `run()`'s own
+        // expansion already does (a second one is a duplicate symbol).
+        let mut context: tauri::Context = tauri::generate_context!(test = true);
+        let windows = &context.config().app.windows;
+        assert!(
+            windows.iter().any(|window| window.label == "main"),
+            "tauri.conf.json no longer defines the \"main\" window"
+        );
+
+        let authority = context.runtime_authority_mut();
+        let wrong: Vec<String> = MAIN_WINDOW_ACL
+            .iter()
+            .filter(|(command, allowed)| {
+                let granted = authority
+                    .resolve_access(command, "main", "main", &tauri::ipc::Origin::Local)
+                    .is_some();
+                granted != *allowed
+            })
+            .map(|(command, allowed)| {
+                let expected = if *allowed { "allowed" } else { "denied" };
+                format!("{command} must be {expected}")
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "capabilities/default.json no longer matches MAIN_WINDOW_ACL: {wrong:#?}"
+        );
+    }
 }
