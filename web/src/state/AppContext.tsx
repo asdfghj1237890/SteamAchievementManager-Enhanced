@@ -13,8 +13,8 @@ import { applyPartialSave, type SaveSnapshot } from './applyPartialSave'
 import { touchDetailCache } from './detailCache'
 import { appIdKey, mergeFreshGames } from './gameListMerge'
 import { progressIdsToRequest } from './progressBatch'
-import { getVersion } from '@tauri-apps/api/app'
-import { fetchLatestVersion, installLatestUpdate, openReleasesPage, updaterSupported } from '../data/update'
+import { appVersion, fetchLatestVersion, installLatestUpdate, openReleasesPage, updaterSupported } from '../data/update'
+import { winDestroy, winOnCloseRequested } from '../lib/appWindow'
 import { isNewer } from '../lib/version'
 import { applyDownloadEvent, installBusy, IDLE_INSTALL } from '../lib/updater'
 import { rootCssVars, styleTokens, themeTokens } from '../lib/theme'
@@ -211,7 +211,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let cancelled = false
     void (async () => {
       try {
-        const current = await getVersion()
+        const current = await appVersion()
         if (cancelled) return
         let update: AppState['update'] = null
         let updateStatus: AppState['updateStatus'] = 'ok'
@@ -227,7 +227,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const supported = await updaterSupported().catch(() => false)
         if (!cancelled) dispatch({ version: current, update, updateStatus, updaterSupported: supported })
       } catch {
-        // getVersion failed — ignore
+        // appVersion failed — ignore
       }
     })()
     return () => {
@@ -242,9 +242,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unlisten: (() => void) | undefined
     void (async () => {
       try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window')
-        const win = getCurrentWindow()
-        const un = await win.onCloseRequested((event) => {
+        const un = await winOnCloseRequested((event) => {
           const s = stateRef.current
           let pending = 0
           for (const id of Object.keys(s.loaded)) {
@@ -258,7 +256,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               confirmLabel: tRef.current('confirm.quit'),
               danger: true,
               onConfirm: () => {
-                void win.destroy()
+                void winDestroy()
               },
             })
           }

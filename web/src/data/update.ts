@@ -1,7 +1,13 @@
+import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import type { DownloadEvent } from '../lib/updater'
+
+/** Version of the running app, as set in tauri.conf.json (Tauri only). */
+export async function appVersion(): Promise<string> {
+  return getVersion()
+}
 
 /** Latest published version from the release manifest (Tauri only). The manifest is
  *  not authenticated — only the update packages are signature-checked — so Rust
