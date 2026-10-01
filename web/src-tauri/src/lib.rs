@@ -15,6 +15,59 @@ const WORKER_TIMEOUT_SECS: u64 = 45;
 // compromised webview from forcing millions of serial ownership FFI calls.
 const MAX_CANDIDATE_APP_IDS: usize = 65_536;
 
+// Upper bounds on one `save_changes` request, checked before a write worker is spawned.
+// Both sit far above any real game (Steam itself caps an achievement/stat API name at
+// 128 bytes — k_cchStatNameMax); they only stop a compromised webview from piping an
+// arbitrarily large payload into a worker that then walks it against Steam.
+const MAX_SAVE_ENTRIES: usize = 50_000;
+const MAX_SAVE_ID_BYTES: usize = 256;
+
+// Held around every write worker so two saves never talk to Steam at the same time.
+static WRITE_WORKER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Locks `mutex`, recovering the guard if an earlier holder panicked. The write lock
+/// guards no data (it only orders workers), so a poisoned lock is still safe to take.
+fn lock_ignoring_poison<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Parses a renderer-supplied app id: a non-zero `u32`, anything else is rejected. The
+/// host validates it before spawning (and passes the parsed number on in canonical
+/// decimal form) instead of forwarding the raw string to the worker's argv.
+fn parse_app_id(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(id) if id != 0 => Ok(id),
+        _ => Err("無效的 appId".to_string()),
+    }
+}
+
+/// Rejects a save whose change set exceeds `MAX_SAVE_ENTRIES` in total or contains an
+/// id longer than `MAX_SAVE_ID_BYTES`. Pure, so it is unit-testable without a worker.
+fn check_change_limits(changes: &GameChanges) -> Result<(), String> {
+    let total = changes.achievements.len() + changes.stats.len();
+    if total > MAX_SAVE_ENTRIES {
+        return Err(format!("變更數量超過 {MAX_SAVE_ENTRIES} 筆上限"));
+    }
+    let too_long = |id: &String| id.len() > MAX_SAVE_ID_BYTES;
+    if changes.achievements.keys().any(too_long) || changes.stats.keys().any(too_long) {
+        return Err(format!("成就或統計 ID 超過 {MAX_SAVE_ID_BYTES} 位元組上限"));
+    }
+    Ok(())
+}
+
+// Set by Steam on everything it launches (e.g. this app added as a non-Steam shortcut)
+// and inherited by child processes. The worker sets its own SteamAppId, so these are
+// dropped to give it the same environment as a normal launch.
+const STEAM_LAUNCH_ENV: [&str; 2] = ["SteamGameId", "SteamOverlayGameId"];
+
+fn clear_steam_launch_env(cmd: &mut Command) {
+    for key in STEAM_LAUNCH_ENV {
+        cmd.env_remove(key);
+    }
+}
+
 fn join_pipe_reader(
     reader: Option<std::thread::JoinHandle<Result<Vec<u8>, String>>>,
 ) -> Result<Vec<u8>, String> {
@@ -48,16 +101,37 @@ async fn list_games(app_ids: Vec<u32>) -> Result<Vec<OwnedGame>, String> {
 }
 
 // ---------- per-game read/write via a self-spawned worker process ----------
-fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+/// The command that re-runs `exe` (this app) as a `--steam-worker` for `args`.
+fn self_worker_command(exe: &std::path::Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(exe);
     cmd.arg("--steam-worker");
     cmd.args(args);
+    clear_steam_launch_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — no console flash
     }
+    cmd
+}
+
+fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    run_worker_command(
+        self_worker_command(&exe, args),
+        stdin_data.map(str::to_owned),
+        Duration::from_secs(WORKER_TIMEOUT_SECS),
+    )
+}
+
+/// Runs `cmd` to completion, feeding it `stdin_data`, and returns its trimmed stdout —
+/// or, when it exits non-zero, its stderr as the error. A worker that has not finished
+/// within `timeout` is killed.
+fn run_worker_command(
+    mut cmd: Command,
+    stdin_data: Option<String>,
+    timeout: Duration,
+) -> Result<String, String> {
     // Large payloads (e.g. a bulk write) go over stdin, not argv, to stay clear of the
     // OS command-line length limit (~32 KB on Windows) for games with many achievements.
     cmd.stdin(if stdin_data.is_some() {
@@ -92,42 +166,62 @@ fn run_self_worker(args: &[&str], stdin_data: Option<&str>) -> Result<String, St
                 .map_err(|e| e.to_string())
         })
     });
-    if let Some(data) = stdin_data {
-        let mut stdin = child.stdin.take().ok_or("worker stdin 無法取得")?;
-        stdin
-            .write_all(data.as_bytes())
-            .map_err(|e| e.to_string())?;
-        // stdin dropped here → closes the pipe so the worker's read sees EOF
-    }
+    // Written from its own thread, like the two readers, so the write sits under the
+    // timeout below: a worker that stalls before draining a payload larger than the
+    // pipe buffer would otherwise block this call for good — and with it every later
+    // save, since save_changes holds the write lock across it.
+    let stdin_writer = match stdin_data {
+        Some(data) => {
+            let mut stdin = child.stdin.take().ok_or("worker stdin 無法取得")?;
+            Some(std::thread::spawn(move || {
+                // stdin is dropped when this returns → closes the pipe so the worker's
+                // read sees EOF
+                stdin.write_all(data.as_bytes()).map_err(|e| e.to_string())
+            }))
+        }
+        None => None,
+    };
     // Ok: the worker closed stdout (exited, or about to). Disconnected: there was no
     // reader thread. Either way wait() returns promptly below. Only a real timeout
-    // kills the worker.
-    if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
-        stdout_closed.recv_timeout(Duration::from_secs(WORKER_TIMEOUT_SECS))
-    {
+    // kills the worker — which also closes its end of the three pipes, so the helper
+    // threads (not joined on this path) end with it, the writer on a broken pipe.
+    if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = stdout_closed.recv_timeout(timeout) {
         let _ = child.kill();
         let _ = child.wait();
-        return Err(format!("worker 逾時（超過 {WORKER_TIMEOUT_SECS} 秒）"));
+        return Err(format!("worker 逾時（超過 {} 秒）", timeout.as_secs()));
     }
     let status = child.wait().map_err(|e| e.to_string())?;
 
     let stdout = join_pipe_reader(stdout_reader)?;
     let stderr = join_pipe_reader(stderr_reader)?;
+    let stdin_written = match stdin_writer {
+        Some(writer) => writer
+            .join()
+            .map_err(|_| "worker stdin writer panic".to_string())?,
+        None => Ok(()),
+    };
 
     if status.success() {
+        // A worker only exits 0 after reading its whole payload; anything else fails.
+        stdin_written?;
         Ok(String::from_utf8_lossy(&stdout).trim().to_string())
     } else {
+        // The worker's own message says why it stopped. If it left before draining
+        // stdin the write failed too, which is reported when the worker said nothing.
         let err = String::from_utf8_lossy(&stderr).trim().to_string();
-        Err(if err.is_empty() {
-            "worker 失敗".into()
-        } else {
+        Err(if !err.is_empty() {
             err
+        } else if let Err(write_error) = stdin_written {
+            write_error
+        } else {
+            "worker 失敗".into()
         })
     }
 }
 
 #[tauri::command]
 async fn load_game(app_id: String) -> Result<serde_json::Value, String> {
+    let app_id = parse_app_id(&app_id)?.to_string();
     tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let json = run_self_worker(&["read", app_id.as_str()], None)?;
         serde_json::from_str(&json).map_err(|e| format!("解析 worker 輸出失敗：{e}"))
@@ -172,9 +266,14 @@ fn write_payload(changes: GameChanges) -> String {
 
 #[tauri::command]
 async fn save_changes(app_id: String, changes: GameChanges) -> Result<serde_json::Value, String> {
+    let app_id = parse_app_id(&app_id)?.to_string();
+    check_change_limits(&changes)?;
     tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let payload = write_payload(changes);
-        let json = run_self_worker(&["write", app_id.as_str()], Some(payload.as_str()))?;
+        let json = {
+            let _one_writer = lock_ignoring_poison(&WRITE_WORKER_LOCK);
+            run_self_worker(&["write", app_id.as_str()], Some(payload.as_str()))?
+        };
         serde_json::from_str(&json).map_err(|e| format!("解析失敗：{e}"))
     })
     .await
@@ -240,30 +339,89 @@ async fn game_header(app_id: String) -> Result<String, String> {
 }
 
 // ---------- in-app update check (read-only) ----------
-/// The signed updater manifest attached to the latest GitHub Release (the same
-/// document the updater plugin verifies packages against; see the `plugins.updater`
-/// endpoint in tauri.conf.json). Only its `version` is read here, so the check works
-/// for every install — including the portable .exe, which cannot self-update.
+/// The updater manifest attached to the latest GitHub Release (the same document the
+/// updater plugin reads; see the `plugins.updater` endpoint in tauri.conf.json). The
+/// manifest itself is NOT authenticated — only the packages it points at are
+/// signature-checked, by the updater plugin — so what is read from it here is treated
+/// as untrusted input. Only its `version` is read, so the check works for every
+/// install — including the portable .exe, which cannot self-update.
 const LATEST_JSON_URL: &str = "https://github.com/asdfghj1237890/SteamAchievementManager-Enhanced/releases/latest/download/latest.json";
+
+// The real latest.json is about 1.5 KB (two package URLs and two signatures). The cap
+// is applied twice: ureq's body `limit` counts the bytes taken off the wire — still
+// compressed when the response is gzip-encoded — and `read_manifest_body` counts the
+// decoded bytes, so a small compressed response cannot expand past it in memory.
+const LATEST_JSON_MAX_BYTES: u64 = 64 * 1024;
+
+/// Reads a latest.json body of at most `LATEST_JSON_MAX_BYTES` (decoded) bytes. A longer
+/// one is an error, and no more than one byte past the cap is ever read from `reader`.
+fn read_manifest_body(reader: impl Read) -> Result<String, String> {
+    let mut body = Vec::new();
+    reader
+        .take(LATEST_JSON_MAX_BYTES + 1)
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    if body.len() as u64 > LATEST_JSON_MAX_BYTES {
+        return Err(format!(
+            "latest.json is larger than {LATEST_JSON_MAX_BYTES} bytes"
+        ));
+    }
+    String::from_utf8(body).map_err(|e| e.to_string())
+}
+
+// Three groups of up to ten digits plus the two dots.
+const MAX_VERSION_LEN: usize = 32;
+
+/// Whether `v` is a plain `x.y.z` version: exactly three dot-separated groups of ASCII
+/// digits, at most `MAX_VERSION_LEN` bytes. Nothing else from the unauthenticated
+/// manifest may reach the renderer, which compares the string and shows it in the
+/// update banner.
+fn is_plain_version(v: &str) -> bool {
+    if v.len() > MAX_VERSION_LEN {
+        return false;
+    }
+    let mut groups = 0;
+    for group in v.split('.') {
+        if group.is_empty() || !group.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        groups += 1;
+    }
+    groups == 3
+}
+
+/// Extracts the validated `version` from a latest.json body.
+fn manifest_version(body: &str) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    let version = v
+        .get("version")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "latest.json missing 'version'".to_string())?;
+    if !is_plain_version(version) {
+        return Err("latest.json 'version' is not a plain x.y.z version".to_string());
+    }
+    Ok(version.to_string())
+}
 
 /// Fetch the latest published version string from the hosted latest.json.
 #[tauri::command]
 async fn latest_version() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| -> Result<String, String> {
-        let body = ureq::get(LATEST_JSON_URL)
+        let mut response = ureq::get(LATEST_JSON_URL)
             .config()
+            .https_only(true)
             .timeout_global(Some(std::time::Duration::from_secs(10)))
             .build()
             .call()
-            .map_err(|e| e.to_string())?
-            .body_mut()
-            .read_to_string()
             .map_err(|e| e.to_string())?;
-        let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        v.get("version")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| "latest.json missing 'version'".to_string())
+        let body = read_manifest_body(
+            response
+                .body_mut()
+                .with_config()
+                .limit(LATEST_JSON_MAX_BYTES)
+                .reader(),
+        )?;
+        manifest_version(&body)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -273,15 +431,37 @@ async fn latest_version() -> Result<String, String> {
 const RELEASES_URL: &str =
     "https://github.com/asdfghj1237890/SteamAchievementManager-Enhanced/releases/latest";
 
+/// Absolute path of the system's rundll32, from `%SystemRoot%` (falling back to
+/// `C:\Windows` when the variable is missing or not an absolute path). A bare
+/// "rundll32" is not used because std resolves a bare program name in the running
+/// exe's own directory before System32, so a rundll32.exe planted beside the portable
+/// exe would run instead.
+#[cfg(windows)]
+fn rundll32_path(system_root: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    system_root
+        .map(std::path::PathBuf::from)
+        .filter(|root| root.is_absolute())
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"))
+        .join("System32")
+        .join("rundll32.exe")
+}
+
+/// macOS `open`, by absolute path so nothing is resolved through PATH. Also built
+/// under `cfg(test)` so every platform checks it; the macOS-only use alone would leave
+/// it dead code on Windows.
+#[cfg(any(target_os = "macos", test))]
+const MACOS_OPEN_PROGRAM: &str = "/usr/bin/open";
+
 /// Open the GitHub Releases page in the user's default browser. The URL is fixed
 /// here — there is no renderer-supplied input — so there is no shell-injection
 /// surface. The Windows path uses rundll32 (no `cmd.exe`, no metacharacter parsing).
+/// Both helper programs are spawned by absolute path.
 #[tauri::command]
 async fn open_releases() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| -> Result<(), String> {
         #[cfg(target_os = "macos")]
         {
-            std::process::Command::new("open")
+            std::process::Command::new(MACOS_OPEN_PROGRAM)
                 .arg(RELEASES_URL)
                 .spawn()
                 .map(|_| ())
@@ -289,7 +469,7 @@ async fn open_releases() -> Result<(), String> {
         }
         #[cfg(target_os = "windows")]
         {
-            std::process::Command::new("rundll32")
+            std::process::Command::new(rundll32_path(std::env::var_os("SystemRoot")))
                 .args(["url.dll,FileProtocolHandler", RELEASES_URL])
                 .spawn()
                 .map(|_| ())
@@ -353,7 +533,7 @@ fn run_worker(args: &[String]) -> Result<String, String> {
     let mode = args.first().map(String::as_str).unwrap_or("");
     let app_id: u32 = args
         .get(1)
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| parse_app_id(s).ok())
         .ok_or("worker：缺少有效的 appId")?;
     match mode {
         "read" => {
@@ -382,9 +562,10 @@ fn run_worker(args: &[String]) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // In-app updates: the plugin fetches the signed manifest from the fixed endpoint
-        // in tauri.conf.json and verifies each package's minisign signature against the
-        // public key compiled in there before installing. `process` is for the relaunch.
+        // In-app updates: the plugin fetches the manifest from the fixed endpoint in
+        // tauri.conf.json. The manifest itself is unauthenticated; what is verified is
+        // each package's minisign signature, against the public key compiled in there,
+        // before installing. `process` is for the relaunch.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
@@ -429,8 +610,15 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_nsis_uninstaller, run_worker, write_payload, GameChanges, WritePayload};
+    use super::{
+        check_change_limits, clear_steam_launch_env, has_nsis_uninstaller, is_plain_version,
+        load_game, lock_ignoring_poison, manifest_version, parse_app_id, read_manifest_body,
+        run_worker, run_worker_command, save_changes, self_worker_command, write_payload,
+        GameChanges, WritePayload, LATEST_JSON_MAX_BYTES, MACOS_OPEN_PROGRAM, MAX_SAVE_ENTRIES,
+        MAX_SAVE_ID_BYTES, MAX_VERSION_LEN,
+    };
     use std::collections::HashMap;
+    use std::time::Duration;
 
     #[test]
     fn worker_rejects_missing_or_invalid_app_id_without_connecting_to_steam() {
@@ -439,6 +627,369 @@ mod tests {
             run_worker(&["read".into(), "not-a-number".into()]).unwrap_err(),
             "worker：缺少有效的 appId"
         );
+        // App id 0 is refused before any mode runs, for the read and the write path.
+        for mode in ["read", "write"] {
+            assert_eq!(
+                run_worker(&[mode.into(), "0".into()]).unwrap_err(),
+                "worker：缺少有效的 appId"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_app_id_accepts_a_non_zero_u32() {
+        assert_eq!(parse_app_id("440"), Ok(440));
+        assert_eq!(parse_app_id("4294967295"), Ok(u32::MAX));
+    }
+
+    #[test]
+    fn parse_app_id_canonicalizes_alternate_spellings() {
+        // "0440" (and "+440", which u32's parser also takes) parse as 440; the worker is
+        // handed the number's decimal form ("440"), never the renderer's own spelling.
+        for raw in ["0440", "+440"] {
+            assert_eq!(parse_app_id(raw), Ok(440));
+            assert_eq!(
+                parse_app_id(raw).map(|id| id.to_string()),
+                Ok("440".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn parse_app_id_rejects_zero_empty_non_numeric_and_overflow() {
+        for bad in [
+            "0",
+            "000",
+            "",
+            " ",
+            "abc",
+            "440abc",
+            " 440",
+            "440 ",
+            "-1",
+            "4.0",
+            "0x1b8",
+            "--steam-worker",
+            "4294967296",
+            "99999999999999999999",
+        ] {
+            assert_eq!(
+                parse_app_id(bad),
+                Err("無效的 appId".to_string()),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    fn changes_with(achievements: usize, stats: usize) -> GameChanges {
+        GameChanges {
+            achievements: (0..achievements).map(|i| (format!("A{i}"), true)).collect(),
+            stats: (0..stats).map(|i| (format!("S{i}"), 1.0)).collect(),
+        }
+    }
+
+    #[test]
+    fn check_change_limits_accepts_up_to_the_entry_cap() {
+        assert_eq!(check_change_limits(&changes_with(0, 0)), Ok(()));
+        assert_eq!(check_change_limits(&changes_with(3, 2)), Ok(()));
+        assert_eq!(
+            check_change_limits(&changes_with(MAX_SAVE_ENTRIES - 1, 1)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn check_change_limits_rejects_more_entries_than_the_cap() {
+        // The cap is on achievements + stats together, whichever map the excess is in.
+        for over in [
+            changes_with(MAX_SAVE_ENTRIES + 1, 0),
+            changes_with(0, MAX_SAVE_ENTRIES + 1),
+            changes_with(MAX_SAVE_ENTRIES, 1),
+        ] {
+            assert_eq!(
+                check_change_limits(&over),
+                Err(format!("變更數量超過 {MAX_SAVE_ENTRIES} 筆上限"))
+            );
+        }
+    }
+
+    #[test]
+    fn check_change_limits_rejects_an_id_longer_than_the_cap() {
+        let at_cap = "a".repeat(MAX_SAVE_ID_BYTES);
+        let over_cap = "a".repeat(MAX_SAVE_ID_BYTES + 1);
+        let too_long = Err(format!("成就或統計 ID 超過 {MAX_SAVE_ID_BYTES} 位元組上限"));
+
+        let mut ok = changes_with(1, 1);
+        ok.achievements.insert(at_cap.clone(), true);
+        ok.stats.insert(at_cap, 1.0);
+        assert_eq!(check_change_limits(&ok), Ok(()));
+
+        let mut long_achievement = changes_with(1, 1);
+        long_achievement.achievements.insert(over_cap.clone(), true);
+        assert_eq!(check_change_limits(&long_achievement), too_long);
+
+        let mut long_stat = changes_with(1, 1);
+        long_stat.stats.insert(over_cap, 1.0);
+        assert_eq!(check_change_limits(&long_stat), too_long);
+    }
+
+    // The two tests below call the commands themselves, only with requests that are
+    // refused before spawn_blocking — so neither can ever start a worker process.
+    #[test]
+    fn load_game_and_save_changes_reject_an_invalid_app_id_before_spawning() {
+        let invalid = Err("無效的 appId".to_string());
+        assert_eq!(
+            tauri::async_runtime::block_on(load_game("0".into())),
+            invalid
+        );
+        assert_eq!(
+            tauri::async_runtime::block_on(save_changes("0".into(), changes_with(0, 0))),
+            invalid
+        );
+    }
+
+    #[test]
+    fn save_changes_rejects_an_oversized_change_set_before_spawning() {
+        let too_many = changes_with(MAX_SAVE_ENTRIES + 1, 0);
+        assert_eq!(
+            tauri::async_runtime::block_on(save_changes("440".into(), too_many)),
+            Err(format!("變更數量超過 {MAX_SAVE_ENTRIES} 筆上限"))
+        );
+
+        let mut long_id = changes_with(1, 1);
+        long_id
+            .achievements
+            .insert("a".repeat(MAX_SAVE_ID_BYTES + 1), true);
+        assert_eq!(
+            tauri::async_runtime::block_on(save_changes("440".into(), long_id)),
+            Err(format!("成就或統計 ID 超過 {MAX_SAVE_ID_BYTES} 位元組上限"))
+        );
+    }
+
+    #[test]
+    fn lock_ignoring_poison_still_locks_after_a_holder_panicked() {
+        let mutex = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let poisoner = std::sync::Arc::clone(&mutex);
+        let panicked = std::thread::spawn(move || {
+            let _held = poisoner.lock().expect("first lock");
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(mutex.is_poisoned());
+
+        // Taken and released twice: the guard is handed out despite the poison flag.
+        drop(lock_ignoring_poison(&mutex));
+        drop(lock_ignoring_poison(&mutex));
+    }
+
+    #[test]
+    fn worker_command_drops_the_steam_launch_environment() {
+        let mut cmd = std::process::Command::new("worker");
+        // Explicitly set first, so the assertion cannot pass just because the test
+        // process happens not to have these variables.
+        cmd.env("SteamGameId", "440");
+        cmd.env("SteamOverlayGameId", "440");
+        clear_steam_launch_env(&mut cmd);
+        let removed: Vec<&std::ffi::OsStr> = cmd
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(removed.len(), 2);
+        assert!(removed.contains(&std::ffi::OsStr::new("SteamGameId")));
+        assert!(removed.contains(&std::ffi::OsStr::new("SteamOverlayGameId")));
+        assert_eq!(cmd.get_envs().count(), 2, "nothing else is set or removed");
+    }
+
+    #[test]
+    fn self_worker_command_passes_the_args_and_drops_the_steam_launch_environment() {
+        let cmd = self_worker_command(std::path::Path::new("app"), &["write", "440"]);
+        assert_eq!(cmd.get_program(), "app");
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            ["--steam-worker", "write", "440"]
+        );
+        // An explicit removal is listed with no value, whatever this process inherited.
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert_eq!(envs.len(), 2, "nothing else is set or removed");
+        for key in ["SteamGameId", "SteamOverlayGameId"] {
+            assert!(envs.contains(&(std::ffi::OsStr::new(key), None)), "{key}");
+        }
+    }
+
+    // The run_worker_command tests spawn small system programs, never this app.
+    fn system_command(program: &str, args: &[&str]) -> std::process::Command {
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(args);
+        cmd
+    }
+
+    /// Far more than a pipe buffer holds: the write only ends once the child reads it
+    /// all, or is gone.
+    fn payload_larger_than_a_pipe_buffer() -> String {
+        "x".repeat(4 * 1024 * 1024)
+    }
+
+    #[test]
+    fn run_worker_command_feeds_stdin_and_closes_it_so_the_child_sees_eof() {
+        // `sort` (the same name on Windows and Unix) prints only after its stdin ends.
+        assert_eq!(
+            run_worker_command(
+                system_command("sort", &[]),
+                Some("payload\n".to_string()),
+                Duration::from_secs(30)
+            ),
+            Ok("payload".to_string())
+        );
+    }
+
+    #[test]
+    fn run_worker_command_times_out_a_child_that_never_drains_its_stdin() {
+        #[cfg(windows)]
+        let stalled = system_command("ping", &["-n", "30", "127.0.0.1"]);
+        #[cfg(not(windows))]
+        let stalled = system_command("sleep", &["30"]);
+        // Reached after the 1 s timeout, not when the child gives up 30 s later: the
+        // blocked stdin write does not hold the caller.
+        assert_eq!(
+            run_worker_command(
+                stalled,
+                Some(payload_larger_than_a_pipe_buffer()),
+                Duration::from_secs(1)
+            ),
+            Err("worker 逾時（超過 1 秒）".to_string())
+        );
+    }
+
+    #[test]
+    fn run_worker_command_reports_the_failed_stdin_write_of_a_silently_failing_child() {
+        #[cfg(windows)]
+        let failing = system_command("cmd", &["/C", "exit 3"]);
+        #[cfg(not(windows))]
+        let failing = system_command("false", &[]);
+        let error = run_worker_command(
+            failing,
+            Some(payload_larger_than_a_pipe_buffer()),
+            Duration::from_secs(30),
+        )
+        .unwrap_err();
+        assert_ne!(error, "worker 失敗", "the write error is what is reported");
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn is_plain_version_accepts_three_numeric_groups() {
+        for good in ["1.4.1", "0.0.0", "10.20.30", "01.2.3"] {
+            assert!(is_plain_version(good), "{good:?} must be accepted");
+        }
+        let longest = "1234567890.1234567890.1234567890";
+        assert_eq!(longest.len(), MAX_VERSION_LEN);
+        assert!(is_plain_version(longest));
+    }
+
+    #[test]
+    fn is_plain_version_rejects_everything_else() {
+        for bad in [
+            "",
+            "1",
+            "1.4",
+            "1.4.1.0",
+            "v1.4.1",
+            "1.4.1 ",
+            " 1.4.1",
+            "1.4.1\n",
+            "1..1",
+            ".4.1",
+            "1.4.",
+            "1.4.x",
+            "1.4.-1",
+            "1.4.+1",
+            "1.4.1-beta",
+            "1.4.1+build",
+            "9.9.9 - any text",
+            "9.9.9<b>x</b>",
+            "１.４.１",
+            "12345678901.1234567890.1234567890",
+        ] {
+            assert!(!is_plain_version(bad), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn manifest_version_returns_only_a_plain_version() {
+        assert_eq!(
+            manifest_version(r#"{"version":"1.4.1","notes":"x","platforms":{}}"#),
+            Ok("1.4.1".to_string())
+        );
+        assert_eq!(
+            manifest_version(r#"{"version":"9.9.9 - any text"}"#),
+            Err("latest.json 'version' is not a plain x.y.z version".to_string())
+        );
+        for missing in [r#"{}"#, r#"{"version":141}"#, r#"{"version":null}"#] {
+            assert_eq!(
+                manifest_version(missing),
+                Err("latest.json missing 'version'".to_string())
+            );
+        }
+        assert!(manifest_version("not json").is_err());
+        assert!(manifest_version("").is_err());
+    }
+
+    #[test]
+    fn read_manifest_body_caps_the_decoded_bytes() {
+        let cap = LATEST_JSON_MAX_BYTES as usize;
+        let too_large = Err(format!(
+            "latest.json is larger than {LATEST_JSON_MAX_BYTES} bytes"
+        ));
+        assert_eq!(read_manifest_body("{}".as_bytes()), Ok("{}".to_string()));
+        assert_eq!(
+            read_manifest_body(vec![b' '; cap].as_slice()).map(|body| body.len()),
+            Ok(cap)
+        );
+        assert_eq!(
+            read_manifest_body(vec![b' '; cap + 1].as_slice()),
+            too_large
+        );
+        // An endless body is cut off at the cap instead of being buffered until memory
+        // runs out — what a gzip response expanding without end would otherwise do.
+        assert_eq!(read_manifest_body(std::io::repeat(b' ')), too_large);
+        assert!(read_manifest_body([0xff_u8].as_slice()).is_err());
+    }
+
+    #[test]
+    fn macos_open_program_is_an_absolute_path() {
+        // `Path::is_absolute` is platform-specific (a leading "/" is not absolute on
+        // Windows), so the portable check is on the string itself.
+        assert!(MACOS_OPEN_PROGRAM.starts_with('/'));
+        #[cfg(unix)]
+        assert!(std::path::Path::new(MACOS_OPEN_PROGRAM).is_absolute());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rundll32_path_is_always_absolute_and_under_system32() {
+        use super::rundll32_path;
+        use std::path::PathBuf;
+
+        let fallback = PathBuf::from(r"C:\Windows\System32\rundll32.exe");
+        assert_eq!(
+            rundll32_path(Some(r"D:\WinNT".into())),
+            PathBuf::from(r"D:\WinNT\System32\rundll32.exe")
+        );
+        // Missing, empty, relative or drive-less values fall back to C:\Windows rather
+        // than producing a path that would be resolved against the current directory.
+        assert_eq!(rundll32_path(None), fallback);
+        for bad in ["", "Windows", r".\Windows", r"\Windows", "C:Windows"] {
+            assert_eq!(rundll32_path(Some(bad.into())), fallback, "{bad:?}");
+        }
+        for root in [None, Some(r"D:\WinNT".into()), Some("Windows".into())] {
+            assert!(rundll32_path(root).is_absolute());
+        }
+        // The real environment of this machine resolves to an existing rundll32.
+        let real = rundll32_path(std::env::var_os("SystemRoot"));
+        assert!(real.is_absolute());
+        assert!(real.is_file(), "{} should exist", real.display());
     }
 
     #[test]
