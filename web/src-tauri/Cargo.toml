@@ -9,7 +9,6 @@ edition = "2021"
 rust-version = "1.77.2"
 
 [workspace]
-members = ["vendor/urlpattern-compat"]
 resolver = "2"
 
 # Release profile (profiles only count at the workspace root, so this also covers the
@@ -30,13 +29,13 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.5", features = [] }
+tauri = { version = "2.12.3", features = [] }
 tauri-plugin-log = "2"
 steam-core = { path = "../steam-core" }
 ureq = "3"
@@ -44,16 +43,10 @@ ureq = "3"
 # AppImage archives on Linux). Releases ship the signed NSIS installer and the macOS
 # .app.tar.gz, which never go through it, and zip 4 has open advisories
 # (RUSTSEC-2026-0367/0368/0369).
-tauri-plugin-updater = { version = "2.12.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
-tauri-plugin-process = "2.3.1"
+tauri-plugin-updater = { version = "2.13.3", default-features = false, features = ["rustls-tls", "system-proxy"] }
+tauri-plugin-process = "2.4.0"
 
 # Native window chrome on macOS (src/macos_chrome.rs). Same versions tao already uses.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSToolbar", "NSWindow"] }
-
-# Tauri 2.11 still constrains `urlpattern` to the 0.3 series, which depends on
-# the unmaintained UNIC crates. This compatibility package preserves the 0.3
-# version contract while re-exporting the maintained 0.6 implementation.
-[patch.crates-io]
-urlpattern = { path = "vendor/urlpattern-compat" }
