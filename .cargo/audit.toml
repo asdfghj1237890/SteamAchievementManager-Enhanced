@@ -1,4 +1,4 @@
-# Tauri 2.11.5 still resolves its Linux WebKit backend through the unmaintained
+# Tauri 2.12.3 still resolves its Linux WebKit backend through the unmaintained
 # gtk-rs GTK3 bindings. This application only builds/releases Windows and macOS,
 # so those cfg(linux) crates are present in Cargo.lock but never compiled into a
 # supported artifact. Keep each exception explicit: all new warnings, yanks,

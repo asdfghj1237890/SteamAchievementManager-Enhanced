@@ -106,7 +106,7 @@ describe('security settings', () => {
   })
 
   it('declares no remote capability', () => {
-    // The vendored urlpattern shim (Cargo.toml [patch]) is only safe while no remote capability exists.
+    // `remote` would extend these permissions to pages from the web; the app only ever loads its own.
     expect(capability).not.toHaveProperty('remote')
   })
 })
