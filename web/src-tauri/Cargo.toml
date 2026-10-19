@@ -40,7 +40,11 @@ tauri = { version = "2.11.5", features = [] }
 tauri-plugin-log = "2"
 steam-core = { path = "../steam-core" }
 ureq = "3"
-tauri-plugin-updater = "2.12.0"
+# Default features minus `zip`: it only unpacks .zip update bundles on Windows (and
+# AppImage archives on Linux). Releases ship the signed NSIS installer and the macOS
+# .app.tar.gz, which never go through it, and zip 4 has open advisories
+# (RUSTSEC-2026-0367/0368/0369).
+tauri-plugin-updater = { version = "2.12.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-process = "2.3.1"
 
 # Native window chrome on macOS (src/macos_chrome.rs). Same versions tao already uses.
