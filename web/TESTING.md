@@ -208,6 +208,44 @@ npm run tauri -- build --bundles nsis
 Debug builds and the native smoke use `--no-bundle`, which skips bundling and
 therefore signing, so `npm run test:native` needs no key.
 
+**Manual checks around a release.** Two things no automated layer reaches: the
+native window (Vitest and Playwright run in a browser, and the native smoke
+never opens one) and a real update, which needs a published release signed
+with the real key.
+
+- *Native window, before tagging.* Do this whenever a release moves Tauri, tao
+  or wry. On Windows the main window has no system frame (`decorations: false`,
+  drawn by `TitleBar`), so moving, resizing and snapping all go through tao's
+  undecorated-window code. Run `npm run tauri -- dev` next to the previous
+  release and check that both behave the same:
+  - the window appears without a white flash;
+  - dragging the title bar moves it, and a double-click maximizes and restores;
+  - every edge and corner resizes, down to the 900×600 minimum;
+  - snapping to screen edges and corners, and `Win`+arrow keys, work;
+  - minimize, maximize/restore and close work, and a maximized window stays
+    inside the work area (it covers neither the taskbar nor the screen edge);
+  - moving between monitors with different scaling (for example 100% and 150%)
+    keeps text sharp and the size sensible;
+  - with an unsaved edit, closing asks first (choose not to close; nothing is
+    written to Steam unless you save).
+- *In-app update, after publishing.* Do this whenever a release changes the
+  update path (the updater plugin, the Tauri CLI that signs, the NSIS template,
+  or the key). It is worth doing for any release. Keep the previous version
+  installed from its `-setup.exe` (a portable copy only offers the download
+  link) and, on a Mac, from its `.dmg`. Then:
+  1. Search the release job's log for a warning that the signing key does not
+     match `plugins.updater.pubkey`. The CLI only warns, but every installed
+     app would then refuse the update.
+  2. Open the old version. It shows "New version … available"; choose
+     **Update now**.
+  3. "Downloading update…" and "Installing update…" appear, the passive NSIS
+     installer closes the running app by itself, and the app restarts as the
+     new version with its settings (theme, language, sidebar width) intact.
+  4. On macOS, the `.app` is replaced and restarts as the new version.
+
+  If it fails, note the "Update failed: …" text. Users can still install the
+  new version by hand from the release page.
+
 ## Steam safety boundary
 
 CI deliberately does not perform live Steam writes: achievement/stat changes
