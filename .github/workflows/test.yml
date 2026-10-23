@@ -60,17 +60,21 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - name: Read the lockfile-pinned Playwright version
+      - name: Read the Playwright version and runner distribution
         id: playwright-version
-        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+          . /etc/os-release
+          echo "distribution=${ID}-${VERSION_ID}" >> "$GITHUB_OUTPUT"
       # The browser build itself is cached per Playwright version; only the OS
       # packages are (re)installed on a hit, which is seconds instead of minutes.
+      # Bind the cache to the distro ABI: Ubuntu 24 and 26 need different binaries.
       - name: Cache the Playwright browser build
         id: playwright-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ steps.playwright-version.outputs.version }}
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright-version.outputs.distribution }}-${{ matrix.browser }}-${{ steps.playwright-version.outputs.version }}
       - name: Install the lockfile-pinned Playwright browser
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npm exec -- playwright install --with-deps ${{ matrix.browser }}
