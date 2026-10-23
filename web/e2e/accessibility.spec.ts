@@ -1,6 +1,9 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from './fixtures'
 
+// Audit settled colors, without entrance fades producing transient contrast failures.
+test.use({ reducedMotion: 'reduce' })
+
 async function expectAccessible(page: ConstructorParameters<typeof AxeBuilder>[0]['page']) {
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
