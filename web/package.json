@@ -28,7 +28,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-process": "^2.4.0",
-    "@tauri-apps/plugin-updater": "^2.13.3",
+    "@tauri-apps/plugin-updater": "^2.14.0",
     "react": "^19.2.8",
     "react-dom": "^19.3.0",
     "react-router": "^8.4.0"
