@@ -238,8 +238,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ---- warn before quitting with unsaved edits in any loaded game (Tauri only) ----
   useEffect(() => {
     if (!isTauri()) return
-    let cancelled = false
-    let unlisten: (() => void) | undefined
+    const controller = new AbortController()
     void (async () => {
       try {
         const un = await winOnCloseRequested((event) => {
@@ -261,15 +260,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             })
           }
         })
-        if (cancelled) un()
-        else unlisten = un
+        if (controller.signal.aborted) un()
+        else controller.signal.addEventListener('abort', un, { once: true })
       } catch {
         // window API unavailable (e.g. non-Tauri) — skip the guard
       }
     })()
     return () => {
-      cancelled = true
-      unlisten?.()
+      controller.abort()
     }
   }, [])
 
@@ -277,7 +275,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const loadProgressBatch = source.loadProgressBatch?.bind(source)
     if (state.gamesStatus !== 'ready' || !loadProgressBatch) return
-    let cancelled = false
+    const controller = new AbortController()
     let settled = false
     // Skip games whose detail is already loaded: their completion is derived live from
     // the loaded achievements (completionFor / applyLoadedGame), so overwriting it here
@@ -298,7 +296,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void loadProgressBatch(appIds)
       .then((updates) => {
         settled = true
-        if (cancelled) return
+        if (controller.signal.aborted) return
         dispatch((cur) => ({
           games: cur.games.map((g) =>
             requested.has(g.appId) ? { ...g, completion: updates[g.appId] } : g,
@@ -313,7 +311,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         appIds.forEach((id) => tracker.ids.delete(id))
       })
     return () => {
-      cancelled = true
+      controller.abort()
       // Superseded while in flight: its result is dropped, so let the next run ask again.
       if (!settled) appIds.forEach((id) => tracker.ids.delete(id))
     }
@@ -559,13 +557,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // Only the keys that were *not* sent go in the snapshot: applyPartialSave keeps
         // the live value of every key missing from it, so each edit the user asked to
         // write survives the re-read — it stays pending unless Steam did apply it.
-        const unsent: SaveSnapshot = { ach: {}, stat: {} }
-        Object.keys(aw).forEach((k) => {
-          if (aw[k] === ao[k]) unsent.ach[k] = aw[k]
-        })
-        Object.keys(sw).forEach((k) => {
-          if (sw[k] === so[k]) unsent.stat[k] = sw[k]
-        })
+        const unsent: SaveSnapshot = {
+          ach: Object.fromEntries(Object.entries(aw).filter(([k, value]) => value === ao[k])),
+          stat: Object.fromEntries(Object.entries(sw).filter(([k, value]) => value === so[k])),
+        }
         try {
           const fresh = await source.loadGame(appId)
           dispatch((cur) =>

@@ -54,7 +54,6 @@ const LibraryCard = memo(function LibraryCard({
     <div
       role="button"
       tabIndex={0}
-      aria-label={g.name}
       data-testid={`library-game-${g.appId}`}
       style={cardStyle}
       {...activate(() => onSelect(g.appId))}

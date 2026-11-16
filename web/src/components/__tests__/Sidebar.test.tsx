@@ -71,6 +71,11 @@ describe('Sidebar add by App ID', () => {
     window.location.hash = '#/game/10'
   })
 
+  it('names game rows from their title and completion without the decorative initial', async () => {
+    await renderSidebar()
+    expect(screen.getByTestId('sidebar-game-10')).toHaveAccessibleName('Game 10 0 / 1')
+  })
+
   it('Enter opens the added game when nothing is unsaved', async () => {
     await renderSidebar()
     const user = userEvent.setup()
