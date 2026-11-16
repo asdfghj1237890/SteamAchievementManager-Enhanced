@@ -151,6 +151,23 @@ describe('AppProvider', () => {
     expect([...src.progressCalls[2]].sort()).toEqual(['10', '20'])
   })
 
+  it('ignores a superseded progress batch and retries its games in the next batch', async () => {
+    const src = new FakeSource([summary('10')], {}, { '10': done(1, 2) })
+    let finish: (updates: Record<string, GameCompletion>) => void = () => {}
+    const pending = new Promise<Record<string, GameCompletion>>((resolve) => { finish = resolve })
+    const read = vi.spyOn(src, 'loadProgressBatch').mockImplementationOnce(() => pending)
+    const { result } = setup(src)
+    await waitFor(() => expect(read).toHaveBeenCalledWith(['10']))
+
+    act(() => result.current.set((s) => ({ games: [...s.games, summary('20')] })))
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2))
+    expect(read.mock.calls[1][0]).toEqual(['10', '20'])
+    await waitFor(() => expect(result.current.state.games[0].completion).toEqual(done(1, 2)))
+
+    await act(async () => { finish({ '10': done(9, 10) }); await pending })
+    expect(result.current.state.games[0].completion).toEqual(done(1, 2))
+  })
+
   it('skips the silent reload when a loaded game is revisited within the TTL', async () => {
     const src = new FakeSource([summary('10')], { '10': game('10', [ach('a1', true)]) })
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)

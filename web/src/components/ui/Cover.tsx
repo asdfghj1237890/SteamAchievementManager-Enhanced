@@ -27,7 +27,7 @@ export default function Cover({
   }
 
   return (
-    <div style={style}>
+    <div aria-hidden="true" style={style}>
       {!loaded && children}
       {isTauri() && src && (
         <img

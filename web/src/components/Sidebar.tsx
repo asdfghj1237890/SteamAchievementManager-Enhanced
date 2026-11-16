@@ -65,7 +65,6 @@ const SidebarRow = memo(function SidebarRow({
     <div
       role="button"
       tabIndex={0}
-      aria-label={g.name}
       data-testid={`sidebar-game-${g.appId}`}
       style={rowStyle}
       {...activate(() => onSelect(g.appId))}
