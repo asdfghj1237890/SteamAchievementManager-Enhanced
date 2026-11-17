@@ -165,18 +165,10 @@ jobs:
             web/src-tauri -> target
       - name: Install pinned cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.12.1
+      - name: Verify advisory exceptions stay outside supported targets
+        run: node web/scripts/verify-audit-exceptions.mjs
       - run: cargo audit --deny warnings --file web/steam-core/Cargo.lock
       - run: cargo audit --deny warnings --file web/src-tauri/Cargo.lock
-      - name: Verify GTK advisory exceptions stay outside supported targets
-        shell: bash
-        run: |
-          cargo tree --locked --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --depth 0
-          cargo tree --locked --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin --depth 0
-          if cargo tree --locked --manifest-path web/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
-            echo "GTK3 advisory exception became reachable on Windows" >&2
-            exit 1
-          fi
-          if cargo tree --locked --manifest-path web/src-tauri/Cargo.toml --target aarch64-apple-darwin | grep -Eq '(atk|gdk|glib|gtk|proc-macro-error) v'; then
-            echo "GTK3 advisory exception became reachable on macOS" >&2
-            exit 1
-          fi

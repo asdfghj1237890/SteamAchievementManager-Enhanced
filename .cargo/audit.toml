@@ -1,10 +1,13 @@
 # Tauri 2.12.3 still resolves its Linux WebKit backend through the unmaintained
 # gtk-rs GTK3 bindings. This application only builds/releases Windows and macOS,
 # so those cfg(linux) crates are present in Cargo.lock but never compiled into a
-# supported artifact. Keep each exception explicit: all new warnings, yanks,
+# supported artifact. chrono is also only an inactive serde_with optional dependency.
+# CI verifies every ignored package stays outside both supported target graphs.
+# Keep each exception explicit: all other new warnings, yanks,
 # unsoundness, and vulnerabilities continue to fail the audit.
 [advisories]
 ignore = [
+  "RUSTSEC-2026-0543", # chrono: inactive optional dependency; guarded in CI
   "RUSTSEC-2024-0370", # proc-macro-error, via Linux-only glib-macros/gtk3-macros
   "RUSTSEC-2024-0411", # gdkwayland-sys (GTK3, Linux-only)
   "RUSTSEC-2024-0412", # gdk (GTK3, Linux-only)
