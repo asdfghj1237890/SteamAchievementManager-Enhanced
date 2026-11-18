@@ -131,7 +131,7 @@ jobs:
 
   build-macos:
     needs: [verify-version, quality]
-    runs-on: macos-latest # Apple Silicon (arm64)
+    runs-on: macos-15 # Apple Silicon (arm64)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -141,6 +141,8 @@ jobs:
           node-version: 26.12.1
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Verify Apple Silicon runner
+        run: node web/scripts/verify-macos-runner.mjs
       # No Swatinem/rust-cache and no install scripts, as in build-windows.
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
@@ -164,7 +166,7 @@ jobs:
       # signs, or persist into that step (GITHUB_PATH / GITHUB_ENV, node_modules, the
       # tauri CLI binary) and reach the key there; only a separate signing job on a
       # fresh runner would rule that out. Same timeout, for a hung cold build. Host
-      # target on macos-latest is aarch64-apple-darwin, so this is an Apple Silicon build.
+      # target on macos-15 is aarch64-apple-darwin, so this is an Apple Silicon build.
       - name: Compile the release binary (no signing key, Apple Silicon)
         working-directory: web
         timeout-minutes: 60

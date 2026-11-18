@@ -100,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-15]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,6 +110,9 @@ jobs:
           node-version: 26.12.1
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Verify Apple Silicon runner
+        if: runner.os == 'macOS'
+        run: node web/scripts/verify-macos-runner.mjs
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.96.0
