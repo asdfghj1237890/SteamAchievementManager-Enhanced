@@ -21,3 +21,4 @@ export interface AuditEvaluation {
 
 export declare function isAuditReport(report: unknown): report is AuditReport
 export declare function evaluateAudit(report: AuditReport, allowed?: Map<string, string>): AuditEvaluation
+export declare function validatePicomatchToolingException(report: AuditReport, lockfile: unknown, now?: Date): void

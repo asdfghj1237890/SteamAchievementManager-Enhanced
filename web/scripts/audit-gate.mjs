@@ -7,18 +7,50 @@
 // here too. Anything not on ALLOWED still fails the build.
 
 import { spawnSync } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 /**
- * GHSA ids reviewed and accepted, each with the reason it does not apply here.
- *
- * Empty on purpose: nothing is currently accepted. GHSA-qwww-vcr4-c8h2 (react-router RSC
- * Mode CSRF) used to sit here while the app was pinned to react-router-dom 7.18.2; moving
- * to react-router 8.3.0 fixed it outright, so it was dropped rather than kept as an
- * exception. Prefer fixing over allow-listing.
+ * Reviewed advisory IDs and the exact reasons they were accepted.
+ * The picomatch entry has a separate dev-only/version/expiry guard; this does not
+ * accept other advisories, other versions or production copies of picomatch.
  */
-const ALLOWED = new Map()
+const ALLOWED = new Map([
+  ['GHSA-fc5q-39xc-vjpf', 'Temporary through 2026-12-01 Asia/Taipei: picomatch 4.0.7 is restricted to Vite/Vitest build/test tooling with project-owned glob patterns. No official fixed release is available as of 2026-11-18. Production dependency audit and emitted bundle inspection are clean; dev-only lockfile scope, exact version and expiry are enforced below.'],
+])
+
+const PICOMATCH_ADVISORY = 'GHSA-fc5q-39xc-vjpf'
+// End of 2026-12-01 in Asia/Taipei. This guard grants no exception by itself:
+// it runs only if that advisory has separately been approved in ALLOWED.
+const PICOMATCH_EXCEPTION_EXPIRY = Date.parse('2026-12-01T16:00:00.000Z')
+
+/** Fail closed if a reviewed tooling exception no longer has the reviewed scope. */
+export function validatePicomatchToolingException(report, lockfile, now = new Date()) {
+  if (!Number.isFinite(now.getTime()) || now.getTime() >= PICOMATCH_EXCEPTION_EXPIRY) {
+    throw new Error('The temporary picomatch tooling exception has expired; remove it or review it again.')
+  }
+  if (lockfile?.lockfileVersion !== 3 || !lockfile.packages || Array.isArray(lockfile.packages) || typeof lockfile.packages !== 'object') {
+    throw new Error('Cannot verify the picomatch exception against this lockfile.')
+  }
+  const entries = Object.entries(lockfile.packages).filter(([path]) => /(?:^|\/)node_modules\/picomatch$/.test(path))
+  if (entries.length === 0 || entries.some(([, pkg]) => pkg?.dev !== true || pkg?.version !== '4.0.7' || (pkg.name && pkg.name !== 'picomatch'))) {
+    throw new Error('The picomatch exception requires every locked copy to be dev-only version 4.0.7.')
+  }
+  const paths = new Set(entries.map(([path]) => path))
+  let matched = false
+  for (const [name, vuln] of Object.entries(report.vulnerabilities)) {
+    if (!Array.isArray(vuln?.via)) continue
+    for (const via of vuln.via) {
+      if (typeof via === 'string' || advisoryKey(via) !== PICOMATCH_ADVISORY) continue
+      matched = true
+      if (name !== 'picomatch' || via.name !== 'picomatch' || !Array.isArray(vuln.nodes) || vuln.nodes.length === 0 ||
+          !vuln.nodes.every((path) => typeof path === 'string' && paths.has(path))) {
+        throw new Error('The reported picomatch advisory no longer matches the reviewed tooling scope.')
+      }
+    }
+  }
+  if (!matched) throw new Error('No picomatch advisory was available to validate.')
+}
 
 // A GHSA id as the last path segment of the advisory URL; a trailing slash, query, or
 // fragment after it is tolerated.
@@ -143,6 +175,16 @@ function runCli() {
   }
 
   const { ok, found, blocking, accepted, stale, unreadable } = evaluateAudit(report)
+
+  if (accepted.includes(PICOMATCH_ADVISORY)) {
+    try {
+      const lockfile = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'))
+      validatePicomatchToolingException(report, lockfile)
+    } catch (error) {
+      console.error(`npm audit gate failed — ${error.message}`)
+      process.exit(1)
+    }
+  }
 
   for (const ghsa of accepted) {
     console.log(`accepted: ${ghsa} — ${ALLOWED.get(ghsa)}`)
